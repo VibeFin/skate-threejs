@@ -58,3 +58,19 @@ err.txt
 # while building. Nothing in src/ reads them.
 bar/
 *.mov
+
+screenshots/
+
+*.pid
+
+.agents/
+
+.agentsweb/
+
+.omgithub-runtime/
+
+.opencode-ssh/
+
+.opencode-web/
+
+node_modules/

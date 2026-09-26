@@ -82,10 +82,8 @@ function row(entry: BoardRow, extra = ""): string {
 /**
  * The whole board as one block of HTML.
  *
- * An empty board is a NORMAL result, not an error: nobody has posted yet, the
- * read happened before the game was published, or this is a local test run
- * where nothing online exists. It says so plainly and says nothing about
- * signing in — the SDK owns that conversation.
+ * An empty board is a NORMAL result, not an error: nobody has posted yet on
+ * this device. It says so plainly.
  */
 export function boardHtml(view: BoardView, empty = "No scores posted yet"): string {
   if (view.rows.length === 0) return `<div class="lb"><div class="lb-empty">${esc(empty)}</div></div>`;

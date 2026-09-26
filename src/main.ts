@@ -1,17 +1,14 @@
 // SKATE — boot.
 //
-// Order matters here: player identity first (every Genex game), then the
-// device tier (phones enforce a hard GPU-memory kill that desktop testing
-// never shows), then the renderer built FROM that tier, then the world.
-
-import { initEmbed, waitForPlayer } from "@genex-ai/embed-sdk";
-import { GENEX } from "./genex.config";
-
-initEmbed({
-  slug: GENEX.slug,
-  apiUrl: GENEX.apiUrl,
-  dashboardOrigins: GENEX.dashboardOrigins,
-});
+// Order matters here: the device tier first (phones enforce a hard
+// GPU-memory kill that desktop testing never shows), then the renderer built
+// FROM that tier, then the world.
+//
+// NOTE: this game used to call `initEmbed()` from `@genex-ai/embed-sdk`
+// here. That SDK redirects the page to a Genex sign-in when it finds no
+// ticket — so the game now runs standalone with no online identity. Scores
+// and settings live on this device (see `game/leaderboard.ts` and
+// `audio/settings.ts`).
 
 import * as THREE from "three";
 import { detectTier, rendererAntialias, getQualitySetting } from "./controllers/quality/tier";
@@ -595,9 +592,6 @@ async function boot(): Promise<void> {
 
   await Promise.all([boardJob, skaterJob, dressJob]);
   bootStep(0.9, "Dropping in…");
-
-  // Identity resolves alongside the art; it never blocks the scene.
-  void waitForPlayer().catch(() => {});
 
   // --- runtime plumbing ------------------------------------------------------
   /**

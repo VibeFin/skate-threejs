@@ -24,16 +24,58 @@ Key art: `cms2hv48901lw22lppfy2tr8c` (street, golden hour, UI-free).
   by:** R, instant reset, same block
 
 ## Build plan & status
-Now: **12. THE FAR RAMP, ROUND SEVEN (2026-07-30)** — working mode: **focused
-change, parallel sub-agents, director verifies**. The player asked for ONE
-ultracode workflow (the mobile/desktop optimisation pass) and then, watching it
-sit opaque in its recon phase, set the mode back: *"after the chapter completed
-i wanna continue in chat, not in workflow, with subagents."* So the workflow is
-a one-off for that pass; everything after it is in-chat sub-agents reported as
-they land, because he steers between results and a workflow gives him nothing to
-steer with until it finishes. Milestone 11 is previewed and
-published; the rows still marked ❌/⚠️ in 10 and 11 have NOT been absorbed into
-12 and are still owed.
+Now: **14. REMOVE GENEX (2026-09-26)** — working mode: **focused change**.
+The player said the game redirects to Genex and asked to remove Genex. Done:
+the redirect was the embed SDK's standalone flow (`initEmbed` in `main.ts`
+→ `redirectToAuthorize` → `location.replace` to the dashboard), and the SDK
+is now out of the game entirely. Scores and settings live on the device.
+Milestone 13's table is kept below; milestone 12's rows still marked
+⏳/❌/⚠️ have NOT been absorbed here and are still owed.
+
+### Milestone 14 — REMOVE GENEX (2026-09-26)
+
+| # | change | file |
+| - | ------ | ---- |
+| 1 | `initEmbed` + `waitForPlayer` + `genex.config.ts` deleted — the redirect source is gone | `main.ts`, `genex.config.ts` (deleted) |
+| 2 | board is local: best minute in localStorage, same exported shapes so every readout prints as before | `game/leaderboard.ts` |
+| 3 | audio settings device-only; account stubs kept for signatures | `audio/settings.ts` |
+| 4 | `@genex-ai/embed-sdk` dropped from `package.json` | `package.json` |
+| 5 | results card prints BEST instead of WORLD RANK (rank was always 1 locally) | `ui/hud.ts` |
+
+Verified: `tsc` exit 0 · `vite build` clean · shipped bundle greps 0 hits
+for `redirectToAuthorize`/`location.replace`/`embed-sdk`/`genex.games`.
+Trade-off, stated: no online identity means no global leaderboard and no
+cross-device settings — both are per-device now. If Genex publishing is ever
+wanted back, it re-enters through these same three seams.
+
+### Milestone 13 — MOBILE CONTROLS + OPTIMISATION (2026-09-26)
+
+Already shipped before this milestone (verified by reading, not rebuilt):
+touch layer (`skate-touch-layer.ts`: static stick with hysteresis push/brake
+gate, OLLIE/FLIP/GRAB/MANUAL + RESET + pause, z-16, portrait overlay),
+phone-only chunk split (`skate-touch-layer-*.js` still separate in this
+milestone's `vite build`), `touch-action: none`, viewport-fit cover,
+Auto→phone-low default with 30 fps cap, full governor ladder, KTX2,
+85.67 MB phone-low census.
+
+Landed in this milestone, both phone-only, desktop byte-identical by
+construction (no desktop row is written):
+
+| # | change | effect |
+| - | ------ | ------ |
+| 1 | shadow cadence on phone tiers (`look.ts`: `needsUpdate` every 2nd frame) | halves the ~170-draw shadow rasterisation amortised — the biggest per-frame phone cost left |
+| 2 | plaza anisotropy phone-low 8 → 4 (`props.ts`; phone stays 8, desktop 16) | fill-rate saving on the weakest phones, the tier that paces at 30 fps |
+
+Known artefact (#1): the skater's contact shadow lags one extra frame
+(~16 cm at cruise on 30 fps phone-low). It stays under the board; it arrives
+a frame late. If it reads wrong in play, revert is one ternary.
+
+`tsc` exit 0 · `vite build` clean, touch chunk still split.
+
+Still open, not in this milestone: promote-on-smooth rung (re-earn `phone`
+from measured frames), InstancedMesh shadow-LOD (the triangle axis no shadow
+box can touch), `gpu-audit.mjs` empty-scene gate, row-8 GL census, row 11/12
+desktop items.
 
 Milestone 11 was: **THE THIRD LIST (2026-07-30, overnight)** — working mode:
 **focused change, parallel sub-agents, director verifies**. Milestone 10's table

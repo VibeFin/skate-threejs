@@ -1776,10 +1776,15 @@ export async function dressMaterials(
    * and the grain both survive to the far wall at 16 and die at 24 m at 8. It
    * costs texture bandwidth and no memory at all.
    *
-   * Phones stay at 8: they are already on the 1024 rung, where there is less to
-   * resolve, and fill rate is the thing they have least of.
+   * Phones stay at 8 or below: they are already on the 1024 rung, where there
+   * is less to resolve, and fill rate is the thing they have least of.
+   * `phone-low` drops to 4 — the weakest phones are fill-bound, and at DPR 1
+   * with a 1024 rung there is little extra detail for 8 taps to resolve.
    */
-  const aniso = Math.min(phone ? 8 : 16, renderer.capabilities.getMaxAnisotropy());
+  const aniso = Math.min(
+    tier.name === "phone-low" ? 4 : phone ? 8 : 16,
+    renderer.capabilities.getMaxAnisotropy(),
+  );
   /**
    * One GPU texture per generation+role, shared across the looks that use it.
    *

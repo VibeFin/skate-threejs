@@ -146,7 +146,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import type { Pass } from "three/examples/jsm/postprocessing/Pass.js";
 import type { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
-import { getQualitySetting, type QualityTier } from "../controllers/quality/tier";
+import { getQualitySetting, isPhoneTier, type QualityTier } from "../controllers/quality/tier";
 import { createBodyShine } from "./body-shine";
 import { createDistanceBlur, type DistanceBlur, type DistanceBlurSpec } from "./distance-blur";
 import { createLensDirt, type LensDirt } from "./lens-dirt";
@@ -720,6 +720,20 @@ export function createLookStack(
   let bufferHeight = 0;
   let dirtOn = true;
   let blurOn = true;
+  /**
+   * Phone-only shadow cadence. The sun never moves and the block never moves;
+   * the only genuinely dynamic caster is the skater. On phone tiers the shadow
+   * map re-renders every SECOND frame instead of every frame, halving the
+   * pass's amortised cost (the ~170-draw shadow rasterisation is the single
+   * biggest per-frame geometry cost on a phone). Desktop is untouched — this
+   * counter never gates anything off a phone tier.
+   *
+   * The honest artefact: the skater's own contact shadow lags one extra frame
+   * (~16 cm at cruise on a 30 fps phone-low). His shadow stays under the
+   * board; it just arrives a frame late.
+   */
+  let shadowTick = 0;
+  const phoneShadow = isPhoneTier(tier);
 
   /**
    * The lens plate, built LAZILY and then kept.
@@ -1357,7 +1371,10 @@ export function createLookStack(
       // `WebGLRenderer` (`ui/menu-stage.ts:410`) whose own shadow state is
       // untouched by this.
       renderer.shadowMap.autoUpdate = false;
-      renderer.shadowMap.needsUpdate = true;
+      // Phone tiers refresh every second frame (see `shadowTick` above);
+      // desktop refreshes every frame, exactly as before.
+      shadowTick++;
+      renderer.shadowMap.needsUpdate = phoneShadow ? shadowTick % 2 === 1 : true;
 
       // ABOVE the governor's bypass, because this is not part of the picture
       // the governor is switching off: a machine that has dropped to

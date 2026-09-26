@@ -1747,10 +1747,9 @@ export class Hud {
    * …and the world's answer, once it has one: the board, and where this player
    * stands on it.
    *
-   * The standing line is only printed when the board actually knows about them.
-   * A guest, a local test run and a board that failed to read all come back
-   * with nothing, and none of those is worth a sentence — least of all one
-   * about signing in, which is the SDK's conversation and not the game's.
+    * The standing line is only printed when the board actually knows about them.
+    * A fresh device and a board that failed to read both come back with
+    * nothing, and neither is worth a sentence.
    *
    * Trimmed to five rows here and nowhere else: the card is a beat between two
    * runs and it already carries a score, a standing and two choices. The whole
@@ -1762,7 +1761,9 @@ export class Hud {
     const bits: string[] = [];
     if (posted.improved) bits.push("<b>NEW BEST</b>");
     else if (posted.best !== null && posted.best > score) bits.push(`YOUR BEST ${fmt(posted.best)}`);
-    if (board.me) bits.push(`WORLD RANK ${board.me.rank}`);
+    // The board's own copy of the best — only when the two lines above said
+    // nothing (a tied best): otherwise it would print the same number twice.
+    else if (board.me) bits.push(`BEST ${fmt(board.me.score)}`);
     const sub = this.resultsEl.querySelector(".r-sub");
     if (sub && bits.length > 0) sub.innerHTML = bits.join(" · ");
     const slot = this.resultsEl.querySelector(".r-board");
