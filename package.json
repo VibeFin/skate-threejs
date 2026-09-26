@@ -1,0 +1,23 @@
+{
+  "name": "vitetmp",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@genex-ai/cli-demo": "^0.95.0-dev.252",
+    "@types/three": "^0.185.1",
+    "playwright-core": "^1.62.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.1.1"
+  },
+  "dependencies": {
+    "@genex-ai/embed-sdk": "^0.11.0",
+    "@pixiv/three-vrm": "^3.5.5",
+    "three": "^0.185.1"
+  }
+}

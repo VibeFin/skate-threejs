@@ -1,0 +1,98 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>glb clip check</title></head>
+  <body style="margin:0;background:#171a20;color:#fff;font:600 11px system-ui">
+    <div id="grid" style="padding:6px"></div>
+    <script type="module">
+      // Renders a hand-authored animation GLB on the game's rigged skater as a
+      // strip of poses across time — the same "watch it, don't trust the score"
+      // check used for the generated takes.
+      import * as THREE from "three";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+      const CHAR = "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/rigged-character.glb";
+      const p = new URLSearchParams(location.search);
+      const CLIP = p.get("glb") ?? "/assets/olie_animation.glb";
+      const FROM = Number(p.get("from") ?? 0);
+      const TO = Number(p.get("to") ?? -1);
+      const STEPS = Number(p.get("steps") ?? 10);
+      const VIEW = p.get("view") ?? "side";
+      // Yaw applied to the rig before rendering, so a clip can be checked in
+      // the orientation the game actually places it in.
+      const YAW = Number(p.get("yaw") ?? 0);
+
+      const W = 150, H = 250;
+      const loader = new GLTFLoader();
+      const char = await loader.loadAsync(CHAR);
+      const clipGltf = await loader.loadAsync(CLIP);
+      const clip = clipGltf.animations[0];
+      const to = TO > 0 ? TO : clip.duration;
+
+      const root = char.scene;
+      root.rotation.y = YAW;
+      const mixer = new THREE.AnimationMixer(root);
+      const action = mixer.clipAction(clip);
+      action.play();
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x171a20);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x3a4050, 2.4));
+      const key = new THREE.DirectionalLight(0xffffff, 2.0);
+      key.position.set(2.5, 4, 3);
+      scene.add(key);
+      scene.add(root);
+      scene.add(new THREE.GridHelper(4, 8, 0xff5555, 0x3d4754));
+
+      const cam = new THREE.PerspectiveCamera(30, W / H, 0.1, 50);
+      // "back" is the game's chase camera: behind the skater, looking along +Z.
+      if (VIEW === "front") cam.position.set(0.5, 1.1, 4.4);
+      else if (VIEW === "back") cam.position.set(0.4, 1.3, -4.4);
+      else cam.position.set(4.4, 1.1, 0.5);
+      cam.lookAt(0, 0.8, 0);
+
+      const gl = new THREE.WebGLRenderer({ antialias: true });
+      gl.setSize(W, H);
+      gl.outputColorSpace = THREE.SRGBColorSpace;
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;flex-wrap:wrap;gap:2px";
+      document.getElementById("grid").appendChild(row);
+
+      let t = 0;
+      for (let s = 0; s <= STEPS; s++) {
+        const want = FROM + ((to - FROM) * s) / STEPS;
+        mixer.setTime(want);
+        t = want;
+        root.updateMatrixWorld(true);
+        gl.render(scene, cam);
+
+        const c = document.createElement("canvas");
+        c.width = W;
+        c.height = H;
+        c.getContext("2d").drawImage(gl.domElement, 0, 0);
+        const cell = document.createElement("div");
+        cell.style.textAlign = "center";
+        const cap = document.createElement("div");
+        cap.textContent = t.toFixed(2) + "s";
+        // Which foot is where, in world axes — the only way to say for certain
+        // which leg leaves the deck and which end of the board it leaves from.
+        const lf = new THREE.Vector3(), rf = new THREE.Vector3();
+        root.traverse((o) => {
+          if (o.name === "LeftFoot") lf.setFromMatrixPosition(o.matrixWorld);
+          if (o.name === "RightFoot") rf.setFromMatrixPosition(o.matrixWorld);
+        });
+        const feet = document.createElement("div");
+        feet.style.cssText = "font-size:9px;color:#8fd";
+        feet.textContent =
+          `L x${lf.x.toFixed(2)} z${lf.z.toFixed(2)} y${lf.y.toFixed(2)}\n` +
+          `R x${rf.x.toFixed(2)} z${rf.z.toFixed(2)} y${rf.y.toFixed(2)}`;
+        feet.style.whiteSpace = "pre";
+        cell.appendChild(feet);
+        cell.appendChild(c);
+        cell.appendChild(cap);
+        row.appendChild(cell);
+      }
+      document.title = "glb clip check ready";
+    </script>
+  </body>
+</html>

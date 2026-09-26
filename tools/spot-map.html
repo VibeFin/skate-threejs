@@ -1,0 +1,790 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>spot map — mesh vs query, and how it looks</title></head>
+  <body style="margin:0;background:#14161b;color:#e8e4dc;font:600 12px ui-monospace,monospace">
+    <div style="padding:12px">
+      <div style="opacity:.6;padding-bottom:6px">THE LOOK — the real scene, real materials, real light rig, from skater height. Click a shot to enlarge.</div>
+      <div id="layers" style="display:flex;gap:12px;flex-wrap:wrap;padding-bottom:8px;opacity:.8"></div>
+      <div id="focus"></div>
+      <div id="shots" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+    </div>
+    <div style="display:flex;gap:14px;padding:12px;flex-wrap:wrap;align-items:flex-start">
+      <div>
+        <div style="opacity:.6;padding-bottom:6px">SURFACE QUERY — colour is material, brightness is height. Red hatching = blocked() at board height.</div>
+        <canvas id="map"></canvas>
+      </div>
+      <div>
+        <div style="opacity:.6;padding-bottom:6px">MESH vs QUERY, top faces — green where the HEIGHT matches, red where it does not.</div>
+        <canvas id="agree"></canvas>
+      </div>
+      <div>
+        <div style="opacity:.6;padding-bottom:6px">MESH vs QUERY, top faces — green where the NORMAL matches, red where it does not (full red = 30&deg;).</div>
+        <canvas id="normals"></canvas>
+      </div>
+    </div>
+    <pre id="out" style="padding:12px;line-height:1.55">measuring…</pre>
+    <script type="module">
+      // The spot, taken apart three ways.
+      //
+      // 1. THE LOOK. The real scene — createField(), the real materials, the
+      //    real sun — rendered from fixed cameras at skater height. A street
+      //    spot is judged by looking at it, and squinting at a top-down map is
+      //    how a spot ends up lit from the wrong side and still passing.
+      // 2. THE QUERY vs THE MESH. Rasterised from above out of the SAME
+      //    description the ride queries, and the difference coloured in — for
+      //    HEIGHT and for NORMAL. Normal used to go unchecked, which is exactly
+      //    why every ramp in the spot shipped lit from the wrong side.
+      // 3. THE RIDE. A real SkateModel driven over the features, because the
+      //    two maps above agree perfectly on a manual pad the board rolls
+      //    straight through.
+      //
+      // Absolute, NOT document-relative: this page is served from /tools/.
+      import * as THREE from "/node_modules/three/build/three.module.js";
+      import {
+        RAILS, SOLIDS, SPOT_SOLIDS, PLACEMENTS, STREET_SPOT, SPOT_SPAWN,
+        SPOT_MIN_X, SPOT_MAX_X, SPOT_MIN_Z, SPOT_MAX_Z,
+        meshSolid, topOf, normalOf, buildSpotGeometry,
+      } from "/src/world/spot.ts";
+      import { makeSample } from "/src/world/surface.ts";
+      import { createField, dressField } from "/src/world/field.ts";
+      import { DECALS, FACADES, BAND_DEPTH, bandsOf, shopfrontsOf, drainpipesOf } from "/src/world/props.ts";
+      import { SkateModel, EMPTY_INPUT } from "/src/skate/skate-model.ts";
+      import { TIERS } from "/src/controllers/quality/tier.ts";
+
+      const out = document.getElementById("out");
+      const log = (s) => (out.textContent += "\n" + s);
+      out.textContent = "";
+
+      const PX = 8; // pixels per metre
+      const W = Math.round((SPOT_MAX_X - SPOT_MIN_X) * PX);
+      const H = Math.round((SPOT_MAX_Z - SPOT_MIN_Z) * PX);
+      const toPx = (x, z) => [(x - SPOT_MIN_X) * PX, (SPOT_MAX_Z - z) * PX]; // +Z is UP the page
+
+      const KIND_RGB = {
+        concrete: [186, 179, 165],
+        asphalt: [74, 76, 84],
+        metal: [150, 162, 176],
+        wood: [166, 128, 82],
+        grass: [96, 130, 70],
+      };
+
+      // --- left: the query, rasterised -------------------------------------
+      const map = document.getElementById("map");
+      map.width = W; map.height = H;
+      const mg = map.getContext("2d");
+      const img = mg.createImageData(W, H);
+      let hMin = Infinity, hMax = -Infinity;
+      const heights = new Float32Array(W * H);
+      const sample = makeSample();
+      for (let py = 0; py < H; py++) {
+        for (let px = 0; px < W; px++) {
+          const x = SPOT_MIN_X + (px + 0.5) / PX;
+          const z = SPOT_MAX_Z - (py + 0.5) / PX;
+          const s = STREET_SPOT.sample(x, z, Infinity, sample);
+          // Walls are drawn as walls, not as very bright floor.
+          const h = Math.min(s.height, 3.2);
+          heights[py * W + px] = h;
+          if (s.height < 4) { hMin = Math.min(hMin, h); hMax = Math.max(hMax, h); }
+        }
+      }
+      for (let py = 0; py < H; py++) {
+        for (let px = 0; px < W; px++) {
+          const x = SPOT_MIN_X + (px + 0.5) / PX;
+          const z = SPOT_MAX_Z - (py + 0.5) / PX;
+          const s = STREET_SPOT.sample(x, z, Infinity, sample);
+          const rgb = KIND_RGB[s.kind] ?? [200, 60, 200];
+          const t = 0.45 + 0.55 * ((heights[py * W + px] - hMin) / Math.max(0.01, hMax - hMin));
+          const wall = s.height > 3.2;
+          const i = (py * W + px) * 4;
+          // Blocked at the height a board standing on the PLAZA probes at.
+          const blocked = STREET_SPOT.blocked(x, z, 0.3);
+          img.data[i] = wall ? 40 : rgb[0] * t + (blocked ? 46 : 0);
+          img.data[i + 1] = wall ? 34 : rgb[1] * t;
+          img.data[i + 2] = wall ? 30 : rgb[2] * t;
+          img.data[i + 3] = 255;
+        }
+      }
+      mg.putImageData(img, 0, 0);
+
+      // rails, over the top
+      mg.lineCap = "round";
+      for (const line of RAILS) {
+        const [ax, ay] = toPx(line.a.x, line.a.z);
+        const [bx, by] = toPx(line.b.x, line.b.z);
+        mg.strokeStyle = line.kind === "rail" ? "#57e0ff" : "#ffd24a";
+        mg.lineWidth = line.kind === "rail" ? 3.5 : 2.5;
+        mg.beginPath(); mg.moveTo(ax, ay); mg.lineTo(bx, by); mg.stroke();
+        mg.fillStyle = "#0b0d10";
+        mg.beginPath(); mg.arc(ax, ay, 2.5, 0, 7); mg.fill();
+      }
+      const [sx, sz] = toPx(SPOT_SPAWN.x, SPOT_SPAWN.z);
+      mg.strokeStyle = "#ff5b3a"; mg.lineWidth = 2;
+      mg.beginPath(); mg.arc(sx, sz, 5, 0, 7); mg.stroke();
+      mg.beginPath(); mg.moveTo(sx, sz);
+      mg.lineTo(sx + Math.sin(SPOT_SPAWN.heading) * 16, sz - Math.cos(SPOT_SPAWN.heading) * 16);
+      mg.stroke();
+
+      // --- right: the mesh, coloured by how far it is from the query -------
+      // Two maps, not one. Height agreement was the only thing this harness
+      // ever checked, and a top face can sit at exactly the right height while
+      // its shading normal points into the ground — which is precisely the bug
+      // that shipped. The sun vector is the field's own, so the N·L column is
+      // the error the player actually sees.
+      const SUN = new THREE.Vector3(-46, 22, -26).normalize();
+      const agree = document.getElementById("agree");
+      const normalsCv = document.getElementById("normals");
+      agree.width = normalsCv.width = W;
+      agree.height = normalsCv.height = H;
+      const ag = agree.getContext("2d");
+      const ng = normalsCv.getContext("2d");
+      ag.fillStyle = ng.fillStyle = "#0b0d10";
+      ag.fillRect(0, 0, W, H); ng.fillRect(0, 0, W, H);
+
+      const tri = (ctx, m, i, style) => {
+        ctx.fillStyle = style;
+        ctx.beginPath();
+        for (let v = 0; v < 3; v++) {
+          const [px, py] = toPx(m.pos[i + v * 3], m.pos[i + v * 3 + 2]);
+          v === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        ctx.fill();
+      };
+      const ramp = (k) => `rgb(${Math.round(40 + 215 * k)},${Math.round(210 - 170 * k)},${Math.round(90 - 60 * k)})`;
+
+      let worst = 0, worstWhere = "", worstPerp = 0, sum = 0, n = 0, offSolid = 0;
+      let worstAng = 0, worstAngWhere = "", sumAng = 0, worstNL = 0, worstNLWhere = "", wind = 0;
+      const perSolid = new Map();
+      const a3 = new THREE.Vector3(), b3 = new THREE.Vector3(), c3 = new THREE.Vector3();
+      const stored = new THREE.Vector3(), trueN = new THREE.Vector3(), geoN = new THREE.Vector3();
+      // SPOT_SOLIDS, not SOLIDS: the street furniture's colliders have no mesh
+      // of their own, so there is nothing here for them to agree with.
+      for (const s of SPOT_SOLIDS) {
+        const m = { pos: [], nor: [], uv: [] };
+        meshSolid(s, m);
+        for (let t = 0; t < m.pos.length / 9; t++) {
+          const i = t * 9;
+          const ny = m.nor[i + 1];
+          if (ny < 0.05) continue; // vertical faces make no height claim
+          const cx = (m.pos[i] + m.pos[i + 3] + m.pos[i + 6]) / 3;
+          const cy = (m.pos[i + 1] + m.pos[i + 4] + m.pos[i + 7]) / 3;
+          const cz = (m.pos[i + 2] + m.pos[i + 5] + m.pos[i + 8]) / 3;
+          const q = topOf(s, cx, cz);
+          if (q === null) { offSolid++; continue; }
+          const d = Math.abs(q - cy);
+          sum += d; n++;
+          worstPerp = Math.max(worstPerp, d * ny);
+          const rec = perSolid.get(s.id) ?? { worst: 0, ang: 0, nl: 0, n: 0 };
+          rec.worst = Math.max(rec.worst, d); rec.n++;
+          if (d > worst) { worst = d; worstWhere = `${s.id} @ (${cx.toFixed(2)}, ${cz.toFixed(2)})`; }
+
+          // NORMALS. Three sources that must agree: what the mesh SAYS
+          // (the vertex normal), what the query says (the surface normal the
+          // ride tilts the deck onto), and what the triangle's own winding
+          // implies. Any disagreement is a face lit as if it faced elsewhere.
+          stored.set(m.nor[i], m.nor[i + 1], m.nor[i + 2]);
+          // Against THIS solid's own profile, not against whatever the provider
+          // stacks on top at that point — a plaza triangle under the stair set
+          // is not wrong for disagreeing with the stairs.
+          normalOf(s, cx, cz, trueN);
+          a3.set(m.pos[i], m.pos[i + 1], m.pos[i + 2]);
+          b3.set(m.pos[i + 3], m.pos[i + 4], m.pos[i + 5]);
+          c3.set(m.pos[i + 6], m.pos[i + 7], m.pos[i + 8]);
+          geoN.copy(b3.sub(a3)).cross(c3.sub(a3)).normalize();
+          const ang = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(stored.dot(trueN), -1, 1)));
+          sumAng += ang;
+          rec.ang = Math.max(rec.ang, ang);
+          if (ang > worstAng) { worstAng = ang; worstAngWhere = `${s.id} @ (${cx.toFixed(2)}, ${cz.toFixed(2)})`; }
+          if (stored.dot(geoN) < 0.999) wind++;
+          const nl = Math.abs(stored.dot(SUN) - trueN.dot(SUN));
+          rec.nl = Math.max(rec.nl, nl);
+          if (nl > worstNL) {
+            worstNL = nl;
+            worstNLWhere = `${s.id}: N·L shipped ${stored.dot(SUN).toFixed(2)} vs true ${trueN.dot(SUN).toFixed(2)}`;
+          }
+          perSolid.set(s.id, rec);
+
+          // 1 mm of height disagreement is already visible; 10 mm is full red.
+          tri(ag, m, i, ramp(Math.min(1, d / 0.01)));
+          // 1° of normal error is nothing; 30° is a face lit from elsewhere.
+          tri(ng, m, i, ramp(Math.min(1, ang / 30)));
+        }
+      }
+      for (const line of RAILS) {
+        const [ax, ay] = toPx(line.a.x, line.a.z);
+        const [bx, by] = toPx(line.b.x, line.b.z);
+        for (const ctx of [ag, ng]) {
+          ctx.strokeStyle = line.kind === "rail" ? "#57e0ff" : "#ffd24a";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        }
+      }
+
+      log(`=== MESH vs QUERY ===============================================`);
+      log(`  stairs are the one deliberate disagreement — the query is the nosing plane, so`);
+      log(`  the tolerance there is one riser, not zero. Everything else must be sub-millimetre.`);
+      log(`height: ${n} top triangles, mean |Δy| ${((sum / n) * 1000).toFixed(3)} mm, ` +
+          `max |Δy| ${(worst * 1000).toFixed(3)} mm (${worstWhere}), max PERPENDICULAR ${(worstPerp * 1000).toFixed(3)} mm`);
+      log(`normal: mean ${(sumAng / n).toFixed(3)}°, max ${worstAng.toFixed(1)}° (${worstAngWhere})`);
+      log(`        worst shading error — ${worstNLWhere}  (Δ N·L ${worstNL.toFixed(3)})`);
+      log(`winding: ${wind} of ${n} top triangles whose vertex normal disagrees with their own triangle order`);
+      log(`triangles whose centroid fell off their own solid: ${offSolid}`);
+      const solidById = new Map(SOLIDS.map((s) => [s.id, s]));
+      for (const [id, r] of perSolid) {
+        if (r.worst > 1e-6 || r.ang > 0.5) {
+          const p = solidById.get(id).profile;
+          const budget = p.shape === "stairs" ? Math.abs(p.y1 - p.y0) / p.steps : 0;
+          const note = budget
+            ? `   (riser ${(budget * 1000).toFixed(0)} mm — ${r.worst <= budget + 1e-6 ? "within" : "OVER"} the nosing-plane budget)`
+            : "";
+          log(`   ${id.padEnd(18)} Δy ${(r.worst * 1000).toFixed(1).padStart(7)} mm   ` +
+              `Δnormal ${r.ang.toFixed(1).padStart(6)}°   ΔN·L ${r.nl.toFixed(3)}   over ${r.n} tris${note}`);
+        }
+      }
+
+      // --- coverage: anywhere the wheels can go, is there a floor ----------
+      let holes = 0, cells = 0;
+      for (let x = SPOT_MIN_X + 0.25; x < SPOT_MAX_X; x += 0.5) {
+        for (let z = SPOT_MIN_Z + 0.25; z < SPOT_MAX_Z; z += 0.5) {
+          cells++;
+          if (!SOLIDS.some((s) => topOf(s, x, z) !== null)) holes++;
+        }
+      }
+      log(`coverage: ${cells} cells on a 0.5 m grid, ${holes} with nothing under them`);
+
+      let selfBlocked = 0;
+      for (let x = SPOT_MIN_X + 0.5; x < SPOT_MAX_X; x += 1) {
+        for (let z = SPOT_MIN_Z + 0.5; z < SPOT_MAX_Z; z += 1) {
+          if (STREET_SPOT.blocked(x, z, STREET_SPOT.height(x, z, Infinity) + 0.3)) selfBlocked++;
+        }
+      }
+      log(`blocked() self-consistency: ${selfBlocked} cells that block a board standing on their own top`);
+
+      let tris = 0;
+      const geo = buildSpotGeometry();
+      for (const [, g] of geo) tris += g.getAttribute("position").count / 3;
+      log(`mesh: ${tris} triangles across ${geo.size} materials`);
+
+      // --- the street furniture, as matter ---------------------------------
+      //
+      // Thirty-five props shipped intangible: the ride went through dumpsters,
+      // benches, bins, hydrants and 6 m lamp posts, including the lamp that
+      // stood in the mouth of the crossing. PLACEMENTS is in spot.ts now and
+      // generates colliders; this is the check that they landed where the
+      // models are, do not overlap each other, and do not stand inside a wall.
+      log("");
+      log(`=== STREET FURNITURE ============================================`);
+      const props = SOLIDS.filter((s) => s.id.startsWith("prop-"));
+      const scenery = Object.entries(PLACEMENTS)
+        .filter(([kind]) => !props.some((p) => p.id.startsWith(`prop-${kind}-`)))
+        .map(([kind, at]) => `${kind} x${at.length}`);
+      log(`  matter: ${props.length} colliders · scenery (no collider): ${scenery.join(", ") || "none"}`);
+      let clash = 0;
+      for (let i = 0; i < props.length; i++) {
+        for (let j = i + 1; j < props.length; j++) {
+          const a = props[i], b = props[j];
+          if (a.aabb.x0 < b.aabb.x1 && a.aabb.x1 > b.aabb.x0 && a.aabb.z0 < b.aabb.z1 && a.aabb.z1 > b.aabb.z0) {
+            clash++;
+            log(`   ← ${a.id} and ${b.id} share ground`);
+          }
+        }
+      }
+      let sunk = 0;
+      for (const p of props) {
+        for (const s of SPOT_SOLIDS) {
+          const t = topOf(s, p.cx, p.cz);
+          if (t !== null && t > p.base + 0.05) {
+            sunk++;
+            log(`   ← ${p.id} stands at ${p.base.toFixed(2)} but ${s.id} is ${t.toFixed(2)} m here`);
+            break;
+          }
+        }
+      }
+      log(`   → ${clash} overlapping pairs (must be 0), ${sunk} standing inside the architecture (must be 0)`);
+
+      // --- how often the brick's own tag comes back ------------------------
+      //
+      // The generated brick basecolor is a photograph of a real wall with a big
+      // black throw-up across the middle of it, so the tile pitch is also the
+      // pitch at which that ONE piece repeats. Mirrored wrapping doubles the
+      // oriented period; the paint-out veil (props.ts) runs at a pitch that
+      // shares no factor with it, so consecutive copies sit under different
+      // patches.
+      log("");
+      log(`=== THE BRICK'S OWN TAG, and how often it comes back =============`);
+      const PAINT_TILE = 23;
+      for (const s of SPOT_SOLIDS) {
+        if (s.look !== "brick" && s.look !== "brick2") continue;
+        const runs = [["long face", s.hx * 2], ["end face", s.hz * 2]];
+        const tile = s.look === "brick" ? 9 : 7.5;
+        for (const [face, len] of runs) {
+          if (len < 20) continue;
+          log(`   ${s.id.padEnd(16)} ${face.padEnd(10)} ${len.toFixed(0).padStart(3)} m · ` +
+              `plain repeat ${(len / tile).toFixed(1)} copies · mirrored ${(len / (2 * tile)).toFixed(1)} same-handed · ` +
+              `veil windows ${(len / PAINT_TILE).toFixed(1)}`);
+        }
+      }
+
+      // --- the probe band: the gap where a solid is neither floor nor wall --
+      //
+      // The ride resolves a surface it can reach with `yHint = y + HINT_LIFT`
+      // (0.15) and refuses to walk into anything taller than `y + WALL_PROBE`
+      // (0.30). A top that lands BETWEEN those two is invisible AND intangible
+      // — you ride straight through it. That is not a spot bug or a ride bug on
+      // its own; it is a contract between them, so it is measured here.
+      const HINT_LIFT = 0.15, WALL_PROBE = 0.3;
+      log("");
+      log(`=== EVERY SOLID vs THE PROBE BAND (${HINT_LIFT} … ${WALL_PROBE} m) ==============`);
+      log(`  a FLAT top ≤${HINT_LIFT} m over its floor is rolled up · >${WALL_PROBE} m stops you · between = a ghost`);
+      log(`  ramps, stairs and transitions are exempt: resolve() never caps them, so they always resolve`);
+      let ghosts = 0;
+      for (const s of SOLIDS) {
+        let minStep = Infinity, maxStep = -Infinity, ghost = 0, pts = 0;
+        // Inset: a solid that merely SHARES an edge with its neighbour is not
+        // standing on it, and sampling the shared line reports a step that no
+        // board can ever meet.
+        for (let iu = 1; iu < 12; iu++) {
+          for (let iv = 1; iv < 12; iv++) {
+            const u = -s.hx + (2 * s.hx * iu) / 12;
+            const v = -s.hz + (2 * s.hz * iv) / 12;
+            const c = Math.cos(s.yaw), sn = Math.sin(s.yaw);
+            const x = s.cx + c * u + sn * v;
+            const z = s.cz - sn * u + c * v;
+            const top = topOf(s, x, z);
+            if (top === null) continue;
+            // The floor a board would be standing on to meet this face: the
+            // highest OTHER top strictly below it.
+            let floor = -Infinity;
+            for (const o of SOLIDS) {
+              if (o === s) continue;
+              const t = topOf(o, x, z);
+              if (t !== null && t < top - 1e-6 && t > floor) floor = t;
+            }
+            if (floor === -Infinity) continue;
+            const step = top - floor;
+            pts++;
+            minStep = Math.min(minStep, step); maxStep = Math.max(maxStep, step);
+            if (step > HINT_LIFT + 1e-6 && step <= WALL_PROBE + 1e-6) ghost++;
+          }
+        }
+        if (!pts) continue;
+        const flat = s.profile.shape === "flat";
+        if (flat && ghost) ghosts++;
+        const flag = flat && ghost ? "  ← GHOST: neither rideable nor solid" : "";
+        log(`   ${s.id.padEnd(18)} ${flat ? "flat " : s.profile.shape.padEnd(5)} step over what is under it ` +
+            `${minStep.toFixed(3)} … ${maxStep.toFixed(3)} m${flag}`);
+      }
+      log(`   → ${ghosts} flat solids standing inside the blind band (must be 0)`);
+
+      // --- a wall query must not hand back a roof --------------------------
+      log("");
+      log(`=== SURFACE QUERIES INSIDE A WALL ================================`);
+      log(`  a tumbling limb at 0.5 m that reaches a building footprint must not be told the floor is 15 m up`);
+      const wallProbes = [
+        ["north wall", 0, 30.5], ["south wall", 0, -34.5], ["west wall", -34.5, -10],
+        ["east wall", 32.5, 10], ["fence", 31, 16], ["qp deck edge", 0, 28],
+      ];
+      for (const [name, x, z] of wallProbes) {
+        for (const hint of [0.5, 1.6]) {
+          const h = STREET_SPOT.height(x, z, hint);
+          const bad = h > hint + 0.001 ? `  ← ${(h - hint).toFixed(2)} m ABOVE the query` : "";
+          log(`   ${name.padEnd(14)} height(${String(x).padStart(6)}, ${String(z).padStart(6)}, hint ${hint}) = ${h.toFixed(3)}${bad}`);
+        }
+      }
+
+      // --- the ride, driven over the features ------------------------------
+      //
+      // Neither map above can see this: they agree perfectly on a pad the board
+      // rolls straight through, and on a stair set that fires the launch test.
+      // So a real SkateModel is driven over each feature and watched.
+      log("");
+      log(`=== A REAL SkateModel DRIVEN OVER THE FEATURES ===================`);
+      const RUNS = [
+        ["6-stair, riding UP", -9, -8, Math.PI, 14, 2.4],
+        ["6-stair, riding DOWN", -9, -17.5, 0, 14, 2.4],
+        ["3-stair, riding UP", 20, 21, Math.PI, 12, 2.2],
+        ["3-stair, riding DOWN", 20, 15, 0, 12, 2.2],
+        // Short on purpose — long enough to cross the pad at z = 7…11 and no
+        // further, or the quarter pipe at z = 24 owns the number instead.
+        ["manual pad, straight over", 0, 3.5, 0, 10, 1.0],
+        ["bank, riding UP", 2, -6, Math.PI, 14, 2.0],
+        ["block bank, riding UP", 20, 4.2, 0, 12, 2.0],
+        // x = 20 is inside the east driveway, so this one rides the apron out
+        // of the trench. The kerb proper is measured by the lane sweep below.
+        ["driveway apron, road → pavement", 20, -2, Math.PI, 12, 1.6],
+        ["quarter pipe, straight at it", 0, 18, 0, 15, 2.6],
+        ["dock bank, riding UP", -30, 4, 0, 12, 2.2],
+      ];
+      const input = {
+        throttle: true, brake: false, steer: 0,
+        chargeHeld: false, olliePressed: false, kickflipPressed: false,
+      };
+      for (const [name, x, z, heading, speed, secs] of RUNS) {
+        try {
+        const m = new SkateModel({}, STREET_SPOT);
+        m.position.set(x, STREET_SPOT.height(x, z, Infinity), z);
+        m.heading = heading;
+        m.speed = speed;
+        let maxAlt = 0, maxY = m.position.y, airFrames = 0, maxAirAt = "";
+        const startX = m.position.x, startZ = m.position.z;
+        const dt = 1 / 60;
+        for (let f = 0; f < secs * 60; f++) {
+          m.update(input, dt);
+          const floor = STREET_SPOT.height(m.position.x, m.position.z, Infinity);
+          const alt = m.position.y - floor;
+          if (m.state === "air") airFrames++;
+          if (alt > maxAlt) { maxAlt = alt; maxAirAt = `(${m.position.x.toFixed(1)}, ${m.position.z.toFixed(1)})`; }
+          maxY = Math.max(maxY, m.position.y);
+          if (m.state === "ragdoll") break;
+        }
+        const drift = Math.hypot(m.position.x - startX, m.position.z - startZ);
+        const flag = maxAlt > 0.5 ? `  ← LAUNCHED ${maxAlt.toFixed(2)} m at ${maxAirAt}` : "";
+        log(`   ${name.padEnd(28)} peak air ${maxAlt.toFixed(3).padStart(6)} m   peak y ${maxY.toFixed(2).padStart(6)}   ` +
+            `air ${String(airFrames).padStart(3)} f   ran ${drift.toFixed(1).padStart(5)} m to ` +
+            `(${m.position.x.toFixed(1)}, ${m.position.y.toFixed(2)}, ${m.position.z.toFixed(1)})   ${m.state}${flag}`);
+        } catch (e) {
+          // The ride is another lane's file and is edited while this one runs.
+          // A half-written SkateModel must not take the rest of the report down.
+          log(`   ${name.padEnd(28)} SkateModel unavailable — ${e.message}`);
+        }
+      }
+
+      // --- can a line get ACROSS this spot ---------------------------------
+      //
+      // The check the whole round-3 pass turns on. A street spot whose lines do
+      // not connect is a box of ramps, and this one was: the sunken road put a
+      // 0.38 m kerb across the middle of the plaza and the crossing slab put a
+      // 0.38 m step across 88 m of asphalt, so 0 of 61 straight lanes from
+      // z = -8 reached z = +20 and the road could not be ridden in either
+      // direction. Lanes are laid perpendicular to each heading, started just
+      // inside the plaza and asked to run 28 m.
+      //
+      // The FRACTION is not the target and never was — a plaza full of ledges
+      // is supposed to stop a dead-straight roll with nobody steering. What
+      // matters is the blame list underneath: every remaining stop should be a
+      // named piece of architecture that means to stop you (a kerb, a ledge, a
+      // terrace face), and none of them should be the road.
+      log("");
+      log(`=== STRAIGHT LANES, ACROSS THE WHOLE SPOT ========================`);
+      const laneInput = { ...EMPTY_INPUT, throttle: true };
+      /** What is standing in front of the board, if anything. */
+      const inTheWay = (m) => {
+        const probe = m.position.y + 0.3;
+        const fx = Math.sin(m.heading), fz = Math.cos(m.heading);
+        for (let d = 0.05; d < 1.5; d += 0.05) {
+          const x = m.position.x + fx * d, z = m.position.z + fz * d;
+          for (const s of SOLIDS) {
+            const t = topOf(s, x, z);
+            if (t !== null && t > probe) return s.id;
+          }
+        }
+        return "ran out of speed";
+      };
+      const NEED = 28;
+      const blame = new Map();
+      let laneOk = 0, laneAll = 0;
+      const laneRows = [];
+      for (const [name, h] of [["N", 0], ["S", Math.PI], ["E", Math.PI / 2], ["W", -Math.PI / 2],
+                               ["NE", Math.PI / 4], ["SE", 3 * Math.PI / 4],
+                               ["SW", -3 * Math.PI / 4], ["NW", -Math.PI / 4]]) {
+        const fx = Math.sin(h), fz = Math.cos(h), px = Math.cos(h), pz = -Math.sin(h);
+        const inside = (x, z) => x > SPOT_MIN_X + 2 && x < SPOT_MAX_X - 2 && z > SPOT_MIN_Z + 2 && z < SPOT_MAX_Z - 2;
+        let ok = 0, count = 0;
+        for (let off = -44; off <= 44; off += 1.5) {
+          let sx = px * off - fx * 70, sz = pz * off - fz * 70, found = false;
+          for (let d = 0; d < 150; d += 0.4) {
+            const x = sx + fx * d, z = sz + fz * d;
+            if (inside(x, z)) { sx = x; sz = z; found = true; break; }
+          }
+          if (!found) continue;
+          let room = 0;
+          for (let d = 0; d < 110; d += 0.4) {
+            const x = sx + fx * d, z = sz + fz * d;
+            if (!inside(x, z)) break;
+            room = d;
+          }
+          if (room < NEED) continue;
+          count++;
+          try {
+            const m = new SkateModel({}, STREET_SPOT);
+            m.position.set(sx, STREET_SPOT.height(sx, sz, Infinity), sz);
+            m.heading = h;
+            m.speed = 12;
+            let peak = 0, stuck = 0, done = false;
+            for (let i = 0; i < 16 * 60 && !done; i++) {
+              m.update(laneInput, 1 / 60);
+              peak = Math.max(peak, (m.position.x - sx) * fx + (m.position.z - sz) * fz);
+              if (peak >= NEED) { ok++; done = true; break; }
+              stuck = Math.abs(m.speed) < 1.2 ? stuck + 1 : 0;
+              if (m.state === "ragdoll" || stuck > 30) done = true;
+            }
+            if (!done || peak < NEED) blame.set(inTheWay(m), (blame.get(inTheWay(m)) ?? 0) + 1);
+          } catch (e) {
+            count--; // the ride is another lane's file and may be mid-edit
+          }
+        }
+        laneOk += ok; laneAll += count;
+        laneRows.push(`   ${name.padEnd(3)} ${String(ok).padStart(3)}/${String(count).padStart(3)} lanes ran ${NEED} m`);
+      }
+      for (const r of laneRows) log(r);
+      log(`   → ${laneOk}/${laneAll} = ${((100 * laneOk) / Math.max(1, laneAll)).toFixed(0)}%`);
+      log(`   what stopped the rest — every one of these should be something that MEANS to:`);
+      for (const [id, c] of [...blame].sort((a, b) => b[1] - a[1]).slice(0, 14)) {
+        log(`     ${String(c).padStart(3)} x ${id}`);
+      }
+
+      // --- the two lines the level is actually built around ----------------
+      log("");
+      log(`=== THE DESIGNED LINES, END TO END ==============================`);
+      const drive = (x, z, heading, speed, secs, input = { throttle: true }) => {
+        const m = new SkateModel({}, STREET_SPOT);
+        m.position.set(x, STREET_SPOT.height(x, z, Infinity), z);
+        m.heading = heading;
+        m.speed = speed;
+        let peakY = m.position.y;
+        for (let i = 0; i < secs * 60; i++) {
+          m.update({ ...EMPTY_INPUT, ...input }, 1 / 60);
+          peakY = Math.max(peakY, m.position.y);
+          if (m.state === "ragdoll") break;
+        }
+        return { m, peakY };
+      };
+      try {
+        for (const [name, x, z, h, v, secs] of [
+          ["main line: spawn → quarter pipe", SPOT_SPAWN.x, SPOT_SPAWN.z, SPOT_SPAWN.heading, 0, 11],
+          ["the road, east from x = -40", -40, 0, Math.PI / 2, 12, 8],
+          ["the road, west from x = +40", 40, 0, -Math.PI / 2, 12, 8],
+          ["roll in the QP deck, west bank", -22, 30.5, Math.PI / 2, 12, 6],
+          ["over the crossing, south → north", 2, -8, 0, 12, 4],
+          ["west driveway, south → north", -27, -8, 0, 12, 4],
+          ["east driveway, south → north", 20, -8, 0, 12, 4],
+        ]) {
+          const { m, peakY } = drive(x, z, h, v, secs);
+          log(`   ${name.padEnd(34)} ends (${m.position.x.toFixed(1)}, ${m.position.y.toFixed(2)}, ` +
+              `${m.position.z.toFixed(1)})  ${m.speed.toFixed(1)} m/s  ${m.state}  peak y ${peakY.toFixed(2)}`);
+        }
+      } catch (e) {
+        log(`   SkateModel unavailable — ${e.message}`);
+      }
+
+      log("");
+      log("rails — clearance is the rail's y over whatever the query says is under it:");
+      for (const line of RAILS) {
+        let lo = Infinity, hi = -Infinity;
+        for (let i = 0; i <= 20; i++) {
+          const t = i / 20;
+          const x = line.a.x + (line.b.x - line.a.x) * t;
+          const y = line.a.y + (line.b.y - line.a.y) * t;
+          const z = line.a.z + (line.b.z - line.a.z) * t;
+          const floor = STREET_SPOT.height(x, z, y + 0.02);
+          lo = Math.min(lo, y - floor); hi = Math.max(hi, y - floor);
+        }
+        const len = Math.hypot(line.b.x - line.a.x, line.b.y - line.a.y, line.b.z - line.a.z);
+        log(`  ${line.id.padEnd(16)} ${line.kind.padEnd(5)} ${len.toFixed(2).padStart(6)} m  ` +
+            `y ${line.a.y.toFixed(2)}→${line.b.y.toFixed(2)}  clearance ${lo.toFixed(3)}…${hi.toFixed(3)} m`);
+      }
+
+      // --- can you actually SEE the paint ----------------------------------
+      //
+      // Graffiti was one of the player's named asks and fifteen of sixteen
+      // pieces shipped behind an opaque box. A decal is not "placed" until
+      // something has walked out of it along its own normal and found clear
+      // air, so that is what this does: march out of every sample point on
+      // every decal and report what it hits.
+      log("");
+      log(`=== EVERY DECAL, MARCHED OUT OF ITS OWN FACE =====================`);
+      log(`  behind = how far back to the surface it is painted on · front = clear air in front`);
+
+      /** Is (x,y,z) inside solid matter — a spot solid, or a facade band? */
+      const insideSolid = (x, y, z) => {
+        for (const s of SOLIDS) {
+          const top = topOf(s, x, z);
+          if (top !== null && y <= top + 1e-4 && y >= s.base - 1e-4) return s.id;
+        }
+        for (let fi = 0; fi < FACADES.length; fi++) {
+          const f = FACADES[fi];
+          const c = Math.cos(f.yaw), sn = Math.sin(f.yaw);
+          const dx = x - f.x, dz = z - f.z;
+          // Inverse of on(): along runs with +c/-s, out runs with +s/+c.
+          const along = c * dx - sn * dz;
+          const outward = sn * dx + c * dz;
+          if (Math.abs(along) > f.width / 2) continue;
+          for (const b of bandsOf(f)) {
+            if (y < b.y - b.h / 2 || y > b.y + b.h / 2) continue;
+            if (outward > b.proud - BAND_DEPTH / 2 && outward < b.proud + BAND_DEPTH / 2) {
+              return `facade${fi}-band@${b.y}`;
+            }
+          }
+          // …and the wall's own furniture, which is just as opaque as its brick.
+          for (const s of shopfrontsOf(f)) {
+            if (Math.abs(along - s.along) > s.half) continue;
+            if (y < s.y0 || y > s.y1) continue;
+            if (outward > s.out0 && outward < s.out1) return `facade${fi}-fascia`;
+          }
+          // A drainpipe stands 0.12 m proud of the paint, which is enough to cut
+          // a stripe out of a 5 m piece and not enough for anybody to notice.
+          for (const p of drainpipesOf(f, fi)) {
+            if (Math.abs(along - p.along) > p.half) continue;
+            if (outward > p.out0 && outward < p.out1) return `facade${fi}-drainpipe`;
+          }
+        }
+        return null;
+      };
+
+      const nrm = new THREE.Vector3();
+      let hidden = 0, tight = 0;
+      for (const d of DECALS) {
+        if (d.flat) { nrm.set(0, 1, 0); } else { nrm.set(Math.sin(d.yaw), 0, Math.cos(d.yaw)); }
+        // Sample the quad rather than its centre: a piece can be clear in the
+        // middle and buried at one end.
+        let behind = Infinity, front = Infinity, blockedPts = 0, pts = 0, hitBy = "";
+        for (let iu = 0; iu <= 4; iu++) {
+          for (let iv = 0; iv <= 2; iv++) {
+            const su = (iu / 4 - 0.5) * d.w * 0.96;
+            const sv = (iv / 2 - 0.5) * d.h * 0.96;
+            // Along the face: perpendicular to the normal, in the ground plane
+            // for a wall piece, and in the ground plane both ways for a flat.
+            let px, py, pz;
+            if (d.flat) {
+              const c = Math.cos(d.yaw), sn = Math.sin(d.yaw);
+              px = d.x + c * su - sn * sv; py = d.y; pz = d.z + sn * su + c * sv;
+            } else {
+              px = d.x + Math.cos(d.yaw) * su; py = d.y + sv; pz = d.z - Math.sin(d.yaw) * su;
+            }
+            pts++;
+            let b = Infinity, fr = Infinity;
+            for (let s = 0.02; s <= 1.0; s += 0.02) {
+              if (b === Infinity && insideSolid(px - nrm.x * s, py - nrm.y * s, pz - nrm.z * s)) b = s;
+            }
+            for (let s = 0.02; s <= 3.0; s += 0.02) {
+              const hit = insideSolid(px + nrm.x * s, py + nrm.y * s, pz + nrm.z * s);
+              if (hit) { fr = s; hitBy = hit; break; }
+            }
+            // Two different things, and round 2's harness conflated them. A
+            // solid within 0.6 m is the wall's OWN skin — a plinth, a fascia, a
+            // drainpipe — and a piece behind one of those is a bug. A solid
+            // further out is street furniture standing in front of a wall,
+            // which is what a plaza looks like and is not a defect.
+            if (fr <= 0.6) blockedPts++;
+            behind = Math.min(behind, b); front = Math.min(front, fr);
+          }
+        }
+        const occl = blockedPts / pts;
+        if (occl > 0.001) hidden++;
+        if (behind > 0.25) tight++;
+        const flag = occl > 0.001
+          ? `  ← ${(occl * 100).toFixed(0)}% BURIED behind ${hitBy}`
+          : behind > 0.25 ? `  ← FLOATING ${behind.toFixed(2)} m off its wall`
+          : front < 3.0 ? `  · ${front.toFixed(2)} m of clear air, then ${hitBy}` : "";
+        log(`   ${d.id.padEnd(20)} at (${d.x.toFixed(2)}, ${d.y.toFixed(2)}, ${d.z.toFixed(2)})  ` +
+            `behind ${(behind === Infinity ? "—" : behind.toFixed(3)).padStart(6)}  ` +
+            `front ${(front === Infinity ? "clear" : front.toFixed(3)).padStart(6)}${flag}`);
+      }
+      log(`   → ${hidden} of ${DECALS.length} decals occluded, ${tight} floating off their surface`);
+
+      // --- the look ---------------------------------------------------------
+      const shots = document.getElementById("shots");
+      const SHOT_W = 448, SHOT_H = 252;
+      const SHOTS = [
+        ["spawn, down the bank", 2, 2.6, -26, 2, 0.6, -6],
+        ["the crossing, skater height", 1, 1.5, -3, -2, 0.9, 14],
+        ["at the quarter pipe", -3, 1.6, 14, -3, 2.4, 27],
+        ["the QP deck and its run-out", 10, 4.2, 24, -6, 2.6, 32],
+        ["the ledges, west side", -14, 1.5, 12, -22, 0.6, 14],
+        ["6-stair from the plaza", -11, 1.4, -5, -11, 0.9, -13],
+        ["the block, looking back west", 22, 1.5, 12, -4, 1.2, 2],
+        ["the dock and the west wall", -22, 1.6, 20, -32, 2.0, 20],
+        ["wide, from the east alley", 30, 3.2, -2, -8, 2.0, 4],
+        ["the fence, east side", 22, 1.5, 14, 31, 1.4, 18],
+        ["the manual pad, run in", 0, 1.4, 2, 0, 0.8, 12],
+        // The two round-3 fixes you can only judge by looking: the crossing
+        // ridden ALONG the road, and the north wall's brick over a 60 m run —
+        // which is where a repeating tag is legible if it still is.
+        ["down the road, over the crossing", -22, 1.3, 0.5, 30, 1.3, 0.5],
+        ["the north wall, raking", 26, 2.4, 20, -26, 6.0, 33],
+        ["the terrace's east ramp", 30, 1.6, -12, 14, 1.6, -26],
+      ];
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(SHOT_W, SHOT_H, false);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      const scene = new THREE.Scene();
+      const tier = TIERS["desktop-high"];
+      const field = createField(scene, tier);
+      const cam = new THREE.PerspectiveCamera(62, SHOT_W / SHOT_H, 0.1, 400);
+
+      const draw = () => {
+        shots.innerHTML = "";
+        for (const [name, cx, cy, cz, tx, ty, tz] of SHOTS) {
+          cam.position.set(cx, cy, cz);
+          cam.lookAt(tx, ty, tz);
+          renderer.render(scene, cam);
+          const c = document.createElement("canvas");
+          c.width = SHOT_W; c.height = SHOT_H;
+          c.getContext("2d").drawImage(renderer.domElement, 0, 0);
+          c.style.cssText = "border:1px solid #2a2f38;cursor:pointer";
+          c.title = name;
+          c.onclick = () => { c.style.width = c.style.width ? "" : "96vw"; };
+          const wrap = document.createElement("div");
+          wrap.innerHTML = `<div style="opacity:.5;padding:2px 0">${name}</div>`;
+          wrap.appendChild(c);
+          shots.appendChild(wrap);
+        }
+      };
+      // One shot, big, at the top of the page. Eight thumbnails tell you the
+      // spot is lit; they do not tell you whether a piece of graffiti reads or
+      // whether the wax band is on the right side of the arris.
+      const focus = document.getElementById("focus");
+      const bigCam = new THREE.PerspectiveCamera(62, 16 / 9, 0.1, 400);
+      const spotFocus = (i, fov) => {
+        const [name, cx, cy, cz, tx, ty, tz] = SHOTS[i % SHOTS.length];
+        renderer.setSize(1440, 810, false);
+        bigCam.fov = fov ?? 62;
+        bigCam.updateProjectionMatrix();
+        bigCam.position.set(cx, cy, cz);
+        bigCam.lookAt(tx, ty, tz);
+        renderer.render(scene, bigCam);
+        focus.innerHTML = `<div style="opacity:.5;padding:2px 0">FOCUS — ${name}</div>`;
+        const c = document.createElement("canvas");
+        c.width = 1440; c.height = 810;
+        c.style.cssText = "width:100%;max-width:1440px;border:1px solid #2a2f38";
+        c.getContext("2d").drawImage(renderer.domElement, 0, 0);
+        focus.appendChild(c);
+        renderer.setSize(SHOT_W, SHOT_H, false);
+        return name;
+      };
+
+      // The scene itself, on the console, so a material can be poked and the
+      // same cameras re-shot without a reload.
+      Object.assign(window, {
+        spotScene: scene, spotRenderer: renderer, spotDraw: () => draw(), spotFocus, SHOTS,
+      });
+
+      // One checkbox per dressing group. Which layer is doing what to the image
+      // is not answerable by staring at the finished frame — it is answerable
+      // by turning one off and shooting the same camera again.
+      const layers = document.getElementById("layers");
+      const named = [];
+      scene.traverse((o) => { if (o.name && o.name.startsWith("spot-")) named.push(o); });
+      for (const o of named) {
+        const id = `L${named.indexOf(o)}`;
+        const label = document.createElement("label");
+        label.style.cssText = "display:flex;gap:4px;align-items:center;cursor:pointer";
+        label.innerHTML = `<input type="checkbox" id="${id}" checked>${o.name}`;
+        label.querySelector("input").onchange = (e) => { o.visible = e.target.checked; draw(); };
+        layers.appendChild(label);
+      }
+
+      draw();
+      dressField(scene, field, tier, renderer).then(() => {
+        // Re-shoot once the generated textures, spray and props have landed —
+        // the stand-in pass is worth seeing on its own, and the dressed pass is
+        // the one that ships.
+        draw();
+        document.body.dataset.ready = "1";
+      });
+    </script>
+  </body>
+</html>

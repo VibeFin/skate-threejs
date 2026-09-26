@@ -1,0 +1,209 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>move filmstrip</title></head>
+  <body style="margin:0;background:#12151b;color:#fff;font:600 12px ui-monospace,monospace">
+    <div id="hd" style="padding:10px 12px">rendering…</div>
+    <canvas id="film" style="display:block;max-width:100%"></canvas>
+    <script type="module">
+      // Frame-by-frame filmstrip of one move, shot from beside the board with
+      // the camera RIDING the board — so anything that moves in these frames is
+      // the skater moving relative to his deck, which is exactly what the
+      // player complains about. Numbers say how much; this says what it is.
+      //
+      //   ?move=push|ollie|kickflip   ?every=4   ?count=14   ?pre=6
+      import * as THREE from "three";
+      import { SkateModel } from "/src/skate/skate-model.ts";
+      import { SkaterRig } from "/src/skate/skater-rig.ts";
+      import {
+        SkaterAnim, RIDE_HAND_CLIP, OLLIE_HAND_CLIP, PUSH_HAND_CLIP, CROUCH_HAND_CLIP,
+      } from "/src/skate/skater-anim.ts";
+
+      const q = new URLSearchParams(location.search);
+      const MOVE = q.get("move") ?? "push";
+      const EVERY = Number(q.get("every") ?? 4);
+      const COUNT = Number(q.get("count") ?? 14);
+      const PRE = Number(q.get("pre") ?? 6); // frames shown before the move fires
+      const CW = Number(q.get("w") ?? 240);
+      const CH = Number(q.get("h") ?? 330);
+      const COLS = Number(q.get("cols") ?? 7);
+
+      const abs = (u) => (u.startsWith("http") ? u : new URL(u.replace(/^\.\//, "/"), location.origin).href);
+      const CHAR = "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/rigged-character.glb";
+
+      const anim = await SkaterAnim.create(CHAR, "/motion-sets/skate.json");
+      await anim.attachHandClip("ride", { ...RIDE_HAND_CLIP, url: abs(RIDE_HAND_CLIP.url) });
+      await anim.attachHandClip("ollie", { ...OLLIE_HAND_CLIP, url: abs(OLLIE_HAND_CLIP.url) });
+      await anim.attachHandClip("push", { ...PUSH_HAND_CLIP, url: abs(PUSH_HAND_CLIP.url) });
+      await anim.attachHandClip("crouch", { ...CROUCH_HAND_CLIP, url: abs(CROUCH_HAND_CLIP.url) });
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x2a3140);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.2));
+      const key = new THREE.DirectionalLight(0xffffff, 1.6);
+      key.position.set(-3, 5, 2);
+      scene.add(key);
+
+      const rig = new SkaterRig(scene);
+      rig.setCharacter(anim.model, -Math.PI / 2);
+      // Wired exactly as main.ts wires it, so what the strip shows is what the
+      // game does — the moves are driven by scripted INPUT, not by poking the
+      // animation layer behind the model's back.
+      const skate = new SkateModel({
+        onPush: (span) => anim.startPush(span),
+        onCharge: (winding) => (winding ? anim.startCharge() : anim.endCharge()),
+        onPop: (trick, airTime) => anim.playTrick(trick, airTime),
+        onLand: () => anim.playCushion(),
+      });
+      skate.speed = 6;
+
+      // Camera + reference marks ride the board, so a still body is a still frame.
+      const cam = new THREE.PerspectiveCamera(30, CW / CH, 0.1, 60);
+      cam.position.set(-6.2, 1.05, 0);
+      cam.lookAt(0, 0.85, 0);
+      rig.root.add(cam);
+
+      // Where the deck's nose, middle and tail sit — vertical guides in the
+      // board's own frame. The skater should hold station between them.
+      const mat = new THREE.LineBasicMaterial({ color: 0xff5d73 });
+      for (const [z, c] of [[0.42, 0x6cf0a0], [0, 0xff5d73], [-0.42, 0x6cf0a0]]) {
+        const g = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, 0, z), new THREE.Vector3(0, 1.9, z),
+        ]);
+        rig.root.add(new THREE.Line(g, new THREE.LineBasicMaterial({ color: c })));
+      }
+      void mat;
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(CW, CH);
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const rows = Math.ceil(COUNT / COLS);
+      const film = document.getElementById("film");
+      film.width = COLS * CW;
+      film.height = rows * (CH + 20);
+      const ctx = film.getContext("2d");
+      ctx.fillStyle = "#12151b";
+      ctx.fillRect(0, 0, film.width, film.height);
+
+      const DT = 1 / 60;
+      const HOLD = Number(q.get("hold") ?? 30); // frames the jump key is down
+      const IDLE = {
+        throttle: false, brake: false, steer: 0,
+        chargeHeld: false, olliePressed: false, kickflipPressed: false,
+      };
+      // What the player is doing on frame f. Negative f is the run-up.
+      const inputAt = {
+        push: (f) => ({ ...IDLE, throttle: f >= 0 && f < 3 }),
+        // Hold Space for HOLD frames, then let go: crouch → pop → land.
+        jump: (f) => ({ ...IDLE, chargeHeld: f >= 0 && f < HOLD, olliePressed: f === HOLD }),
+        kickflip: (f) => ({ ...IDLE, kickflipPressed: f === 0 }),
+      }[MOVE];
+
+      const step = (f) => {
+        skate.update(inputAt(f), DT);
+        rig.sync(skate, DT);
+        anim.update(DT);
+        rig.followFeet(anim, skate, DT);
+      };
+
+      // Settle the rolling stance first, so frame 0 is a real riding pose.
+      for (let i = 0; i < 90; i++) step(-1e6);
+
+      // Where hips and head sat over the deck on the FIRST frame of the strip.
+      // Held in the board's own frame and re-projected every tile, so the line
+      // is literally "where he was standing when the move began".
+      const hipsBone = anim.model.getObjectByName("Hips");
+      const headBone = anim.model.getObjectByName("Head") ?? hipsBone;
+      const lFoot = anim.model.getObjectByName("LeftFoot");
+      const rFoot = anim.model.getObjectByName("RightFoot");
+      const marks = [];
+      const readout = [];
+      const rootLocal = (o, v) => {
+        v.setFromMatrixPosition(o.matrixWorld);
+        return rig.root.worldToLocal(v);
+      };
+      const screenX = (local) => {
+        const w = local.clone().applyMatrix4(rig.root.matrixWorld).project(cam);
+        return (w.x * 0.5 + 0.5) * CW;
+      };
+
+      let shot = 0;
+      const grab = (label) => {
+        if (shot >= COUNT) return;
+        rig.root.updateMatrixWorld(true);
+        if (marks.length === 0) {
+          marks.push({ p: rootLocal(hipsBone, new THREE.Vector3()), c: "#ffd166" });
+          marks.push({ p: rootLocal(headBone, new THREE.Vector3()), c: "#5ec8ff" });
+        }
+        renderer.render(scene, cam);
+        const cx = (shot % COLS) * CW;
+        const cy = Math.floor(shot / COLS) * (CH + 20);
+        ctx.drawImage(renderer.domElement, cx, cy);
+        // Start-of-move hip / head lines, plus where they are NOW (dashed).
+        for (const m of marks) {
+          ctx.strokeStyle = m.c;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([]);
+          const x = cx + screenX(m.p);
+          ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x, cy + CH); ctx.stroke();
+        }
+        ctx.setLineDash([5, 5]);
+        for (const [o, c] of [[hipsBone, "#ffd166"], [headBone, "#5ec8ff"]]) {
+          ctx.strokeStyle = c;
+          const x = cx + screenX(rootLocal(o, new THREE.Vector3()));
+          ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x, cy + CH); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#cfe3ff";
+        ctx.font = "600 13px ui-monospace,monospace";
+        const dh = (rootLocal(hipsBone, new THREE.Vector3()).z - marks[0].p.z) * 100;
+        const dd = (rootLocal(headBone, new THREE.Vector3()).z - marks[1].p.z) * 100;
+        // The shoe still on the deck — whichever is lower — so foot slide can be
+        // watched alongside the body, since cancelling one costs the other.
+        const lp = rootLocal(lFoot, new THREE.Vector3());
+        const rp = rootLocal(rFoot, new THREE.Vector3());
+        const planted = lp.y <= rp.y ? lp : rp;
+        if (marks.length === 2) marks.push({ p: planted.clone(), c: "#8f98a8" });
+        const df = (planted.z - marks[2].p.z) * 100;
+        const sg = (v) => `${v >= 0 ? "+" : ""}${v.toFixed(1)}`;
+        const dy = (rootLocal(hipsBone, new THREE.Vector3()).y - marks[0].p.y) * 100;
+        // Which way he is POINTED, in the board's own frame: 0° = square down
+        // the nose. A stance that reads "the wrong way round" shows up here as
+        // a step of tens of degrees, and a jitter as a value that will not sit
+        // still between neighbouring frames.
+        const facing = (o) => {
+          const q = new THREE.Quaternion();
+          o.getWorldQuaternion(q);
+          const f = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+          rig.root.updateMatrixWorld(true);
+          f.transformDirection(new THREE.Matrix4().copy(rig.root.matrixWorld).invert());
+          return (Math.atan2(f.x, f.z) * 180) / Math.PI;
+        };
+        const line =
+          `${label}  hips ${sg(dh)}  head ${sg(dd)}  planted foot ${sg(df)}  ` +
+          `hip HEIGHT ${sg(dy)}  YAW body ${facing(hipsBone).toFixed(0)}° head ${facing(headBone).toFixed(0)}°`;
+        ctx.fillText(line, cx + 8, cy + CH + 14);
+        readout.push(line);
+        shot++;
+      };
+
+      // step → grab, in that order: the game never renders a frame it has not
+      // animated, and grabbing before the step showed the bind pose three.js
+      // briefly writes back when the outgoing action stops.
+      // `from` skips ahead to a later part of the move — the frames before it
+      // still RUN, they just aren't photographed, so the move is the same one.
+      const FROM = Number(q.get("from") ?? -PRE * EVERY);
+      let f = -PRE * EVERY;
+      while (shot < COUNT) {
+        step(f);
+        if (f >= FROM && (f - FROM) % EVERY === 0) grab(`${(f * DT).toFixed(2)}s`);
+        f++;
+      }
+      document.getElementById("hd").textContent =
+        `${MOVE} — camera rides the board. red line = deck centre, green = nose & tail. ` +
+        `${COUNT} frames every ${(EVERY * DT * 1000).toFixed(0)} ms\n` +
+        `+cm = toward the NOSE\n` + readout.join("\n");
+      document.getElementById("hd").style.whiteSpace = "pre";
+    </script>
+  </body>
+</html>

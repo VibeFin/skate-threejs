@@ -1,0 +1,11 @@
+{
+  "_": "genex motion compile tunables — the 'change the formula' surface. Pass with --config; every field overrides the built-in default (values here ARE those defaults). rampFrames/tailSkip: frames skipped at a take's head (constraint ramp) and tail (post-processing wobble). idleLoop: the idle seam-search window in frames. headGazeTargetDeg: mean head pitch is LOWERED to this (a natural aiming gaze), never raised. aimPitchDeg: the Up/Dn aim-variant magnitude, spine-distributed. aimCandidates: how many aim mask poses are plucked (one per take). hipsClampM: tall-stance clamp threshold in meters above ARDY rest. minDirDot: minimum travel-direction agreement before a gait cycle is rejected.",
+  "rampFrames": 50,
+  "tailSkip": 10,
+  "idleLoop": { "minFrames": 40, "maxFrames": 70, "step": 2 },
+  "headGazeTargetDeg": 6,
+  "aimPitchDeg": 40,
+  "aimCandidates": 3,
+  "hipsClampM": 0.005,
+  "minDirDot": 0.9
+}

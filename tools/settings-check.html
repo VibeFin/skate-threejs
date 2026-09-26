@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>settings check</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- The game's four faces, exactly as index.html loads them: the card is
+         Anton + Big Shoulders + Barlow, and every number on it is Syne Mono. -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:wght@500;600;700&family=Big+Shoulders+Display:wght@600;700;800&family=Syne+Mono&display=swap"
+      rel="stylesheet" />
+  </head>
+  <body style="margin: 0; background: #6b5a3c">
+    <!-- The REAL SettingsScreen over a golden-hour-ish wall colour, with the
+         look stack and the audio layer stubbed. This page proves the screen's
+         layout, type and controls only — the presets themselves are look.ts's
+         and are exercised by the game, not by this. -->
+    <canvas
+      style="
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(160deg, #b9793a, #5d4a2c 55%, #26221a);
+      "></canvas>
+    <div
+      id="deck"
+      style="
+        position: fixed;
+        z-index: 99;
+        left: 8px;
+        top: 8px;
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+        font: 600 11px ui-monospace, monospace;
+      "></div>
+    <script type="module">
+      import { SettingsScreen } from "/src/ui/settings.ts";
+
+      // The stubs. `refreshFromSetting` is the one call the screen makes into
+      // the render side; printing it is how this page proves the wiring without
+      // building a composer.
+      const look = {
+        refreshFromSetting() {
+          console.log("[look] refreshFromSetting →", localStorage.getItem("genex:quality"));
+        },
+        get preset() {
+          return "high";
+        },
+      };
+      const audio = { musicVolume: 0.3, sfxVolume: 0.7, onLevels: null };
+
+      const settings = new SettingsScreen({
+        look,
+        audio,
+        onClose: () => console.log("[settings] closed"),
+      });
+      settings.open();
+      window.settings = settings;
+      window.audio = audio;
+
+      const beats = {
+        open: () => settings.open(),
+        close: () => settings.close(),
+        "clear choice": () => {
+          localStorage.removeItem("genex:quality");
+          settings.close();
+          settings.open();
+        },
+      };
+      for (const [name, fn] of Object.entries(beats)) {
+        const b = document.createElement("button");
+        b.textContent = name;
+        b.onclick = fn;
+        document.getElementById("deck").appendChild(b);
+      }
+    </script>
+  </body>
+</html>

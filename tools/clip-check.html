@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>clip check</title></head>
+  <body style="margin:0;background:#171a20;color:#fff;font:600 11px system-ui">
+    <div id="grid" style="padding:6px"></div>
+    <script type="module">
+      import * as THREE from "three";
+      import { loadRig, captureRestAnkle, reanchorFeet, groundCalibrate, curlFingers } from "/src/motion/rigs.js";
+      import { ClipSet, Animator } from "/src/motion/anim-runtime.js";
+
+      const MODEL = "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/rigged-character.glb";
+      const p = new URLSearchParams(location.search);
+      const SET = p.get("set");
+      const VIEW = p.get("view") ?? "side";
+      const STEPS = Number(p.get("steps") ?? 6);
+
+      const W = 190, H = 250;
+      const set = await (await fetch(SET)).json();
+      const grid = document.getElementById("grid");
+
+      // ONE WebGL context for every cell — browsers cap live contexts around 16,
+      // and a renderer per cell silently drops the rest as blank tiles.
+      const gl = new THREE.WebGLRenderer({ antialias: true });
+      gl.setSize(W, H);
+      gl.outputColorSpace = THREE.SRGBColorSpace;
+      const snapshot = () => {
+        const c = document.createElement("canvas");
+        c.width = W;
+        c.height = H;
+        c.getContext("2d").drawImage(gl.domElement, 0, 0);
+        return c;
+      };
+
+      // One shared rig per clip; we re-pose it per phase and render each time.
+      for (const name of Object.keys(set.gaits)) {
+        const holder = new THREE.Group();
+        const rig = await loadRig(MODEL, set, holder);
+        rig.computeCorrection();
+        const restAnkle = captureRestAnkle(rig, holder);
+        reanchorFeet(rig, set, holder);
+        const clipSet = new ClipSet(rig, set, set.gaits);
+        groundCalibrate(rig, clipSet, holder, restAnkle);
+        curlFingers(rig, holder);
+        const anim = new Animator(clipSet);
+        const track = clipSet.tracks[name];
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x171a20);
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x3a4050, 2.4));
+        const key = new THREE.DirectionalLight(0xffffff, 2.0);
+        key.position.set(2.5, 4, 3);
+        scene.add(key);
+        scene.add(holder);
+        scene.add(new THREE.GridHelper(4, 8, 0xff5555, 0x3d4754));
+        // Hip-height reference at 0.9 m — a real riding crouch sits well below it.
+        const ref = new THREE.Mesh(
+          new THREE.RingGeometry(0.86, 0.9, 40),
+          new THREE.MeshBasicMaterial({ color: 0x2f6f4f, side: THREE.DoubleSide }),
+        );
+        ref.rotation.x = -Math.PI / 2;
+        ref.position.y = 0.9;
+        scene.add(ref);
+
+        const cam = new THREE.PerspectiveCamera(30, W / H, 0.1, 50);
+        if (VIEW === "side") cam.position.set(4.4, 1.1, 0.5);
+        else if (VIEW === "top") cam.position.set(0.01, 4.4, 0.01);
+        else cam.position.set(0.5, 1.1, 4.4);
+        cam.lookAt(0, 0.8, 0);
+
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;align-items:flex-start;gap:2px;margin-bottom:8px";
+        const label = document.createElement("div");
+        label.textContent = name;
+        label.style.cssText = "writing-mode:vertical-rl;padding:4px;color:#ffd23d";
+        row.appendChild(label);
+
+        const dt = 1 / 60;
+        let elapsed = 0;
+        for (let s = 0; s < STEPS; s++) {
+          const targetPhase = s / STEPS;
+          // advance the animator to this phase from wherever it is
+          const want = targetPhase * track.dur;
+          while (elapsed < want) {
+            anim.setLoops({ [name]: 1 }, dt, [name]);
+            elapsed += dt;
+          }
+          anim.update(0);
+          holder.updateMatrixWorld(true);
+
+          gl.render(scene, cam);
+
+          const cell = document.createElement("div");
+          cell.style.textAlign = "center";
+          const cap = document.createElement("div");
+          cap.textContent = targetPhase.toFixed(2);
+          cap.style.opacity = "0.6";
+          cell.appendChild(snapshot());
+          cell.appendChild(cap);
+          row.appendChild(cell);
+        }
+        grid.appendChild(row);
+      }
+      document.title = "clip check ready";
+    </script>
+  </body>
+</html>

@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>menu check</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:wght@500;600;700&display=swap"
+      rel="stylesheet" />
+  </head>
+  <body style="margin:0;background:#0d1108">
+    <script type="module">
+      // The REAL Menu, mounted with the shipped art. Here to check the controls
+      // list against the layout the game actually binds — the whole screen is a
+      // grid of type, and a binding that wraps or falls off the bottom is only
+      // visible at real size.
+      import { Menu } from "/src/ui/menu.ts";
+
+      const menu = new Menu({
+        logoUrl: "/ui/logotype.png",
+        stillUrl: "https://assets.auras.cc/generations/cms0elozk002v22nucb1ef5ox/image-main",
+        onPlay: () => console.log("play"),
+      });
+      window.menu = menu;
+      menu.setPhase("controls");
+    </script>
+  </body>
+</html>

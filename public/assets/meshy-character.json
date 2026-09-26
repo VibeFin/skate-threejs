@@ -1,0 +1,248 @@
+{
+  "schema": 1,
+  "characterId": "cms0fbiar004o22nuyjqjhzuz",
+  "revision": 1,
+  "manifestVersion": 1,
+  "rig": "meshy-biped",
+  "controllerPack": {
+    "key": "neutral-v3",
+    "version": 3,
+    "fingerprint": "f79fe9505103d82d19a00a39031eba078b15393f4e715975dec603b67d50128c",
+    "actionIds": [
+      243,
+      613,
+      657,
+      616,
+      466
+    ]
+  },
+  "provenance": {
+    "provider": "meshy",
+    "aiModel": "meshy-6",
+    "apiVersion": "v2026.07.25",
+    "meshyApiVersion": "v2026.07.25",
+    "conceptModel": "nano-banana-pro",
+    "conceptGenerationId": "cms0efbqx000922nujb6l61i1",
+    "conceptCandidate": 1,
+    "sourceFaceCount": 168068,
+    "remeshTargetFaceCount": 10000,
+    "remeshActualFaceCount": 10364,
+    "remeshTopology": "triangle",
+    "previewGenerationId": "cms0emu89003122nutb3pz35q",
+    "poseMode": "a-pose",
+    "shouldRemesh": true,
+    "targetPolycount": 10000
+  },
+  "model": {
+    "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/rigged-character.glb",
+    "heightMeters": 1.7,
+    "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+  },
+  "clips": [
+    {
+      "actionId": -2,
+      "key": "Walking_man",
+      "name": "Walking",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-walk-animation-guided-r1-glb",
+      "duration": 1.0666667222976685,
+      "loop": true,
+      "motionPolicy": "controller-loop",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "walk.forward"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-walk-trajectory-guided-r1-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    },
+    {
+      "actionId": -1,
+      "key": "Running",
+      "name": "Running",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-run-animation-guided-r1-glb",
+      "duration": 0.6666666865348816,
+      "loop": true,
+      "motionPolicy": "controller-loop",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "run.forward"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-run-trajectory-guided-r1-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    },
+    {
+      "actionId": 243,
+      "key": "Idle_3",
+      "name": "Idle 3",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-243-r1-guided-glb",
+      "duration": 10,
+      "loop": true,
+      "motionPolicy": "controller-loop",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "idle.default"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-243-r1-guided-trajectory-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    },
+    {
+      "actionId": 466,
+      "key": "Regular_Jump",
+      "name": "Regular Jump",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-466-r1-guided-glb",
+      "duration": 1.9333332777023315,
+      "loop": false,
+      "motionPolicy": "anchored-action",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "jump.full"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-466-r1-guided-trajectory-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    },
+    {
+      "actionId": 613,
+      "key": "Casual_Walk_inplace",
+      "name": "Casual Walk",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-613-r1-guided-glb",
+      "duration": 4.233333110809326,
+      "loop": true,
+      "motionPolicy": "controller-loop",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "walk.forward"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-613-r1-guided-trajectory-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    },
+    {
+      "actionId": 616,
+      "key": "Cautious_Crouch_Walk_Forward_inplace",
+      "name": "Cautious Crouch Walk Forward",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-616-r1-guided-glb",
+      "duration": 1.1666666269302368,
+      "loop": true,
+      "motionPolicy": "controller-loop",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "crouch.forward"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-616-r1-guided-trajectory-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    },
+    {
+      "actionId": 657,
+      "key": "run_fast_10_inplace",
+      "name": "Run Fast 10",
+      "url": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-657-r1-guided-glb",
+      "duration": 0.8333333134651184,
+      "loop": true,
+      "motionPolicy": "controller-loop",
+      "rootMotionValidated": false,
+      "controllerSlots": [
+        "run.forward"
+      ],
+      "nominalSpeed": null,
+      "trajectoryUrl": "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/character-animation-657-r1-guided-trajectory-json",
+      "requirements": {
+        "props": [],
+        "environment": [],
+        "partner": false
+      },
+      "skeletonSignature": "75e59066b1b7286d432628b18718ebba79f5f91d5a51955fe24f53f869fe0a33"
+    }
+  ],
+  "locomotion": {
+    "slots": {
+      "idle.default": "Idle_3",
+      "jump.full": "Regular_Jump",
+      "walk.forward": "Casual_Walk_inplace",
+      "crouch.forward": "Cautious_Crouch_Walk_Forward_inplace",
+      "run.forward": "run_fast_10_inplace",
+      "crouch.idle": "Cautious_Crouch_Walk_Forward_inplace"
+    },
+    "bindings": {
+      "crouch.forward": {
+        "actionId": 616,
+        "clip": "Cautious_Crouch_Walk_Forward_inplace",
+        "mode": "loop"
+      },
+      "crouch.idle": {
+        "actionId": 616,
+        "clip": "Cautious_Crouch_Walk_Forward_inplace",
+        "mode": "pose",
+        "phase": 0
+      },
+      "idle.default": {
+        "actionId": 243,
+        "clip": "Idle_3",
+        "mode": "loop"
+      },
+      "jump.full": {
+        "actionId": 466,
+        "clip": "Regular_Jump",
+        "mode": "one-shot"
+      },
+      "run.forward": {
+        "actionId": 657,
+        "clip": "run_fast_10_inplace",
+        "mode": "loop"
+      },
+      "walk.forward": {
+        "actionId": 613,
+        "clip": "Casual_Walk_inplace",
+        "mode": "loop"
+      }
+    },
+    "fallbacks": {
+      "jump.start": "jump.full",
+      "jump.rise": "jump.full",
+      "jump.fall": "jump.full",
+      "jump.land": "idle.default"
+    },
+    "nominalSpeed": {
+      "walk": 2,
+      "run": 5,
+      "crouch": 0.9
+    },
+    "playbackRate": {
+      "min": 0.6,
+      "max": 1.6
+    }
+  }
+}

@@ -1,0 +1,625 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>veg lab — the trees and the sky, at gameplay distance</title>
+    <link rel="icon" href="data:," />
+  </head>
+  <body style="margin:0;background:#14161b;color:#e8e4dc;font:600 12px ui-monospace,monospace">
+    <div style="padding:12px">
+      <div style="opacity:.6;padding-bottom:6px">
+        THE VEGETATION LIBRARY — every species in <b>src/world/vegetation/</b> and the sky volumes in
+        <b>src/world/sky/</b>, built here and shot from where a chase camera sees them. The thing on
+        trial is <b>shots/ask/m2.png</b>: flat dark-green cones on a hillside. Every frame below is
+        the answer to that frame, so judge them at the distance they are shot from and not closer.
+      </div>
+      <div id="controls" style="display:flex;gap:14px;flex-wrap:wrap;padding:6px 0 10px;align-items:center"></div>
+
+      <div style="opacity:.6;padding:10px 0 6px">THE HILLSIDE — the frame that has to beat the ask. A channel floor, forested banks, eye at 1.6 m, everything under the live level-of-detail bands for the selected tier.</div>
+      <div id="hill"></div>
+
+      <div style="opacity:.6;padding:14px 0 6px">THE STAND — all five species together with a 1.75 m rider pole, from the SHADE side, where a silhouette has nothing but its own outline to sell it.</div>
+      <div id="stand"></div>
+
+      <div style="opacity:.6;padding:14px 0 6px">THE CONTACT SHEET — each species at four seeds, from the SUN side. Two seeds that look the same are a bug: a hillside is two hundred of these.</div>
+      <div id="sheet" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+
+      <div style="opacity:.6;padding:14px 0 6px">THE LEVELS — one tree meshed three ways, side by side at 12 m so the cuts are visible, then the same tree shot at the distance each level actually takes over. If the far card is a different tree from the near mesh, it shows here.</div>
+      <div id="lod"></div>
+
+      <div style="opacity:.6;padding:14px 0 6px">THE SHEETS — every pixel the forest is made of: one foliage atlas, one tiling bark map, and one far-distance card per species. If a canopy reads as cardboard, the alpha in the first of these is where to look — a spray whose outline is a rounded blob is a cone with extra steps.</div>
+      <div id="sheets" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start"></div>
+
+      <div style="opacity:.6;padding:14px 0 6px">THE SKY — the cloud volume over the map's OWN generated panorama (loaded through map 2's <b>dressSky</b>, so this is the real composition and not a mock-up of it), at three coverages. The middle one is the default.</div>
+      <div id="sky" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+
+      <div style="opacity:.6;padding:14px 0 0">
+        THE NUMBERS — measured triangle counts per species per level, the live forest cost from the
+        hillside camera, the band table for every tier, and what the clouds cost to build and to
+        march. A stated budget nobody measured is a stated budget that is wrong.
+      </div>
+    </div>
+    <pre id="out" style="padding:12px;line-height:1.55">measuring…</pre>
+
+    <script type="module">
+      // THE VEGETATION REVIEW PAGE.
+      //
+      // Modelled on tools/props-lab.html, with one deliberate difference worth
+      // stating up front. props-lab BORROWS the game's light rig by calling
+      // createField() and hiding the geometry, so it cannot drift from what the
+      // game ships. This page cannot do that: the forest belongs to no map yet,
+      // map 2's own lane is rewriting spillway.ts underneath it, and half the
+      // point of a library page is to see the same tree under BOTH maps' hours.
+      // So the rigs here are RESTATED, and both are transcribed from the files
+      // that own them, on 2026-07-29:
+      //
+      //   midday  — spillway.ts build(): sun 0xfff2df @ 2.1 on SUN_AZIMUTH /
+      //             SUN_ELEVATION, hemisphere 0x9dc2e8 / 0x8c7a58 @ 0.5,
+      //             fog 0x94a4b2 90 → 620, environmentIntensity 0.22
+      //   golden  — field.ts: the street's low warm key, for the same trees at
+      //             map 1's hour
+      //
+      // The sky is NOT restated. The cloud section calls map 2's own dressSky()
+      // so the panorama, its rotation and its environment intensity are the real
+      // ones — composition with a generated sky is the one claim this lane makes
+      // that a mock-up could not test.
+      import * as THREE from "three";
+      import { SPECIES, SPECIES_IDS, createForest, createTree, growTree, buildTreeMesh, detailFor, BUDGET, vegetationMaterials, imposterMarks, imposterTexture, imposterSize } from "/src/world/vegetation/index.ts";
+      import { createCloudSky, CLOUD_STEPS } from "/src/world/sky/index.ts";
+      import { TIERS } from "/src/controllers/quality/tier.ts";
+      // map2/dressing.ts is loaded LAZILY and inside a try, on purpose: it
+      // belongs to another lane that is rewriting it right now, and a review
+      // page for a library that cannot open because somebody else's module is
+      // mid-edit is a review page nobody can use. Everything above this line is
+      // this lane's own code and renders with or without it.
+
+      const out = document.getElementById("out");
+      const log = (s) => (out.textContent += "\n" + s);
+      out.textContent = "";
+
+      // --- the stage ---------------------------------------------------------
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      // main.ts's own baseline. A tree judged under a different exposure is a
+      // tree judged in a different game.
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.12;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const scene = new THREE.Scene();
+      const stage = new THREE.Group();
+      scene.add(stage);
+      const clearStage = () => {
+        while (stage.children.length) stage.remove(stage.children[0]);
+      };
+
+      // spillway.ts's own numbers.
+      const SUN_AZ = -0.62, SUN_EL = 1.02;
+      const sun = new THREE.DirectionalLight(0xfff2df, 2.1);
+      sun.position.set(
+        90 * Math.cos(SUN_AZ) * Math.cos(SUN_EL),
+        90 * Math.sin(SUN_EL),
+        90 * Math.sin(SUN_AZ) * Math.cos(SUN_EL),
+      );
+      sun.castShadow = true;
+      sun.shadow.mapSize.setScalar(2048);
+      Object.assign(sun.shadow.camera, { left: -58, right: 58, top: 58, bottom: -58, near: 1, far: 260 });
+      sun.shadow.camera.updateProjectionMatrix();
+      sun.shadow.bias = -0.0009;
+      sun.shadow.normalBias = 0.04;
+      scene.add(sun, sun.target);
+      const hemi = new THREE.HemisphereLight(0x9dc2e8, 0x8c7a58, 0.5);
+      scene.add(hemi);
+      scene.fog = new THREE.Fog(0x94a4b2, 90, 620);
+      scene.background = new THREE.Color(0xa9bccd);
+      scene.environmentIntensity = 0.22;
+
+      const GOLDEN = () => {
+        sun.color.set(0xffd2a1);
+        sun.intensity = 3.1;
+        sun.position.set(-70, 34, -46);
+        hemi.color.set(0xa9b1bd);
+        hemi.groundColor.set(0x6b5a44);
+        hemi.intensity = 0.7;
+        scene.fog.color.set(0xc9b49a);
+        if (scene.background.isColor) scene.background.set(0xc9b49a);
+      };
+      const MIDDAY = () => {
+        sun.color.set(0xfff2df);
+        sun.intensity = 2.1;
+        sun.position.set(
+          90 * Math.cos(SUN_AZ) * Math.cos(SUN_EL),
+          90 * Math.sin(SUN_EL),
+          90 * Math.sin(SUN_AZ) * Math.cos(SUN_EL),
+        );
+        hemi.color.set(0x9dc2e8);
+        hemi.groundColor.set(0x8c7a58);
+        hemi.intensity = 0.5;
+        scene.fog.color.set(0x94a4b2);
+        if (scene.background.isColor) scene.background.set(0xa9bccd);
+      };
+
+      // Dry hillside dirt and channel concrete — stand-ins, but the right
+      // VALUE: foliage read against a bright pale ground is a different
+      // judgement from foliage read against dark grass, and this map's ground
+      // is bleached concrete.
+      const dirt = new THREE.MeshStandardMaterial({ color: 0x9a8a70, roughness: 0.98 });
+      const FOV = 62, EYE = 1.6;
+
+      function shoot(w, h, place) {
+        renderer.setSize(w, h, false);
+        const cam = new THREE.PerspectiveCamera(FOV, w / h, 0.1, 600);
+        place(cam);
+        cam.updateMatrixWorld();
+        renderer.render(scene, cam);
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(renderer.domElement, 0, 0);
+        return c;
+      }
+
+      function pane(host, label, canvas) {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = `<div style="opacity:.5;padding:2px 0">${label}</div>`;
+        canvas.style.cssText = "width:100%;max-width:1440px;border:1px solid #2a2f38;display:block";
+        wrap.appendChild(canvas);
+        host.appendChild(wrap);
+      }
+
+      /** A 1.75 m rider-height pole, so scale is a fact and not a feeling. */
+      const poleMats = [
+        new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.7 }),
+        new THREE.MeshStandardMaterial({ color: 0xb8352c, roughness: 0.7 }),
+      ];
+      function scalePole() {
+        const g = new THREE.Group();
+        for (let i = 0; i < 7; i++) {
+          const m = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.25, 0.06), poleMats[i % 2]);
+          m.position.y = 0.125 + i * 0.25;
+          m.castShadow = true;
+          g.add(m);
+        }
+        return g;
+      }
+
+      // --- the channel -------------------------------------------------------
+      // A stand-in for map 2's shape: a flat floor with banks rising away from
+      // it. The trees have to stand on a SLOPE — half of what was wrong with the
+      // cones is only visible when a stand of them recedes up a hillside.
+      const FLOOR_HALF = 12, BANK = 34, BANK_RISE = 0.52;
+      const heightAt = (x) => {
+        const o = Math.abs(x) - FLOOR_HALF;
+        if (o <= 0) return 0;
+        return Math.min(o, BANK) * BANK_RISE + Math.max(0, o - BANK) * 0.12;
+      };
+      function channelMesh(length) {
+        const seg = 120, cols = 96;
+        const g = new THREE.PlaneGeometry(2 * (FLOOR_HALF + BANK + 40), length, cols, seg);
+        g.rotateX(-Math.PI / 2);
+        const p = g.getAttribute("position");
+        for (let i = 0; i < p.count; i++) p.setY(i, heightAt(p.getX(i)));
+        g.computeVertexNormals();
+        const uv = g.getAttribute("uv");
+        for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * 40, uv.getY(i) * 40);
+        const m = new THREE.Mesh(g, dirt);
+        m.receiveShadow = true;
+        return m;
+      }
+
+      // --- state -------------------------------------------------------------
+      // The tier is a query parameter as well as a picker, so a capture script
+      // can shoot the phone budget without a click. This is a REVIEW page — the
+      // game has no such parameter and never will.
+      const PARAMS = new URLSearchParams(location.search);
+      let tierName = TIERS[PARAMS.get("tier")] ? PARAMS.get("tier") : "desktop";
+      let seedBase = 0;
+      let hour = "midday";
+      let forest = null;
+
+      // --- the hillside ------------------------------------------------------
+      function drawHillside(host) {
+        host.innerHTML = "";
+        clearStage();
+        const tier = TIERS[tierName];
+        const LEN = 320;
+        stage.add(channelMesh(LEN));
+
+        // The placement rule map 2's own forest uses, restated: rows starting
+        // 1.5 m outside the deck and climbing the bank, thinning as they go.
+        const placements = [];
+        let n = 0;
+        const rnd = (() => { let s = 12345 + seedBase; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); })();
+        for (let z = -LEN / 2; z < LEN / 2; z += 6.5) {
+          for (const side of [-1, 1]) {
+            for (let row = 0; row < 3; row++) {
+              if (rnd() > 0.8) continue;
+              const outv = FLOOR_HALF + 1.5 + (BANK - 4) * ((row + rnd()) / 3);
+              const x = side * outv;
+              const roll = rnd();
+              const species = roll < 0.42 ? "fir" : roll < 0.72 ? "spruce" : roll < 0.93 ? "pine" : "broadleaf";
+              placements.push({ species, x, y: heightAt(x) - 0.2, z: z + rnd() * 5, scale: 0.75 + rnd() * 0.55 });
+              n++;
+            }
+          }
+          // Scrub at the toe of the bank, where a forest meets concrete.
+          for (const side of [-1, 1]) {
+            if (rnd() > 0.5) continue;
+            const x = side * (FLOOR_HALF + 0.4 + rnd() * 1.6);
+            placements.push({ species: "scrub", x, y: heightAt(x) - 0.05, z: z + rnd() * 5, scale: 0.8 + rnd() * 0.6 });
+            n++;
+          }
+        }
+        forest = createForest({ tier, placements, cullDistance: 620 * tier.drawDistanceScale });
+        stage.add(forest.group);
+        const pole = scalePole();
+        pole.position.set(2.2, 0, -LEN / 2 + 34);
+        stage.add(pole);
+
+        // The ask's own frame: on the floor, looking down the channel.
+        const camPos = new THREE.Vector3(0, EYE, -LEN / 2 + 30);
+        forest.update(0.5, camPos);
+        pane(host, `down the channel — ${n} trees · tier ${tierName} · bands ${forest.budget.near}/${forest.budget.mid} m · ${forest.stats.triangles.toLocaleString()} tris in ${forest.stats.drawCalls} draws`,
+          shoot(1440, 620, (c) => { c.position.copy(camPos); c.lookAt(0, 3.4, camPos.z + 90); }));
+
+        // …and from up on the bank, which is where a level-of-detail band edge
+        // is actually visible: half the stand is near and half is mid.
+        const up = new THREE.Vector3(-30, heightAt(-30) + 6, -LEN / 2 + 60);
+        forest.update(0.5, up);
+        pane(host, `from the bank — ${forest.stats.near} near · ${forest.stats.mid} mid · ${forest.stats.far} card · ${forest.stats.culled} culled · ${forest.stats.triangles.toLocaleString()} tris`,
+          shoot(1440, 470, (c) => { c.position.copy(up); c.lookAt(6, 4, up.z + 70); }));
+
+        forest.update(0.5, camPos);
+      }
+
+      // --- the stand ---------------------------------------------------------
+      function drawStand(host) {
+        host.innerHTML = "";
+        clearStage();
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), dirt);
+        ground.geometry.rotateX(-Math.PI / 2);
+        ground.receiveShadow = true;
+        stage.add(ground);
+        let x = 0;
+        const spots = [];
+        for (const [i, id] of SPECIES_IDS.entries()) {
+          const t = createTree(id, seedBase + 31 * i + 5, "near");
+          t.group.position.set(x, 0, 0);
+          stage.add(t.group);
+          spots.push({ id, x, h: t.height, w: t.spread, tris: t.triangles });
+          x += t.spread + 4.5;
+        }
+        const pole = scalePole();
+        pole.position.set(-3.2, 0, 1.2);
+        stage.add(pole);
+        const mid = x / 2 - 2;
+        const dist = Math.max(16, x * 0.78);
+        pane(host, `left to right: ${spots.map((s) => `${s.id} ${s.h.toFixed(1)} m`).join(" · ")} — the striped pole is 1.75 m`,
+          shoot(1440, 560, (c) => {
+            c.position.set(mid, EYE + 3.2, dist);
+            c.lookAt(mid, 8.0, 0);
+          }));
+      }
+
+      // --- the contact sheet -------------------------------------------------
+      function drawSheet(host) {
+        host.innerHTML = "";
+        for (const id of SPECIES_IDS) {
+          clearStage();
+          const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), dirt);
+          ground.geometry.rotateX(-Math.PI / 2);
+          ground.receiveShadow = true;
+          stage.add(ground);
+          let x = 0;
+          let tall = 0;
+          for (let k = 0; k < 4; k++) {
+            const t = createTree(id, seedBase + 9973 * k + id.length * 131, "near");
+            t.group.position.set(x, 0, 0);
+            stage.add(t.group);
+            x += Math.max(2.2, t.spread * 1.5 + 1.2);
+            tall = Math.max(tall, t.height);
+          }
+          const dist = Math.max(14, tall * 1.5);
+          const canvas = shoot(470, 300, (c) => {
+            c.position.set(x / 2 - 1, EYE + tall * 0.22, dist);
+            c.lookAt(x / 2 - 1, tall * 0.48, 0);
+          });
+          canvas.style.cssText = "border:1px solid #2a2f38;display:block";
+          const wrap = document.createElement("div");
+          wrap.innerHTML = `<div style="opacity:.55;padding:2px 0">${id} — ${SPECIES[id].what}</div>` +
+            `<div style="opacity:.35;padding-bottom:2px">4 seeds · camera ${dist.toFixed(0)} m</div>`;
+          wrap.appendChild(canvas);
+          host.appendChild(wrap);
+        }
+      }
+
+      // --- the levels --------------------------------------------------------
+      function drawLods(host) {
+        host.innerHTML = "";
+        const id = "fir";
+        const profile = SPECIES[id];
+        const seed = seedBase + 9973 + id.length * 131;
+        const skeleton = growTree(profile, seed);
+        const near = buildTreeMesh(profile, skeleton, detailFor(profile, "near"));
+        const mid = buildTreeMesh(profile, skeleton, detailFor(profile, "mid"));
+
+        clearStage();
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(300, 300), dirt);
+        ground.geometry.rotateX(-Math.PI / 2);
+        ground.receiveShadow = true;
+        stage.add(ground);
+        const mats = vegetationMaterials();
+        const put = (built, x) => {
+          const g = new THREE.Group();
+          const b = new THREE.Mesh(built.bark, mats.bark);
+          const f = new THREE.Mesh(built.foliage, mats.foliage);
+          f.customDepthMaterial = mats.foliageDepth;
+          b.castShadow = f.castShadow = true;
+          b.receiveShadow = f.receiveShadow = true;
+          g.add(b, f);
+          g.position.x = x;
+          stage.add(g);
+        };
+        put(near, -9);
+        put(mid, 0);
+        // The card, through the forest path — one placement, forced far.
+        const cardForest = createForest({ tier: TIERS[tierName], placements: [{ species: id, x: 9, y: 0, z: 0, seed: seed, yaw: 0 }] });
+        stage.add(cardForest.group);
+        // Far enough to be in the card band, near enough not to be culled outright.
+        cardForest.update(1, new THREE.Vector3(9, 1.6, BUDGET[tierName].mid * 1.3));
+        pane(host, `near ${near.triangles} tris · mid ${mid.triangles} tris · card 4 tris — all three at 12 m, which is closer than any of them is ever drawn`,
+          shoot(1440, 470, (c) => { c.position.set(0, EYE + 3, 30); c.lookAt(0, 8, 0); }));
+
+        // And at the real switch distances, which is the only place a pop
+        // matters. Same tree, three cameras, framed to the same size on screen.
+        clearStage();
+        stage.add(ground);
+        const b = BUDGET[tierName];
+        const shots = [];
+        for (const [label, built, dist] of [["near mesh", near, Math.max(8, b.near * 0.9)], ["mid mesh", mid, Math.max(20, b.mid * 0.9)]]) {
+          clearStage();
+          stage.add(ground);
+          put(built, 0);
+          shots.push([label, dist, shoot(470, 420, (c) => { c.position.set(0, EYE + dist * 0.09, dist); c.lookAt(0, built.height * 0.5, 0); })]);
+        }
+        clearStage();
+        stage.add(ground);
+        const far2 = createForest({ tier: TIERS[tierName], placements: [{ species: id, x: 0, y: 0, z: 0, seed, yaw: 0 }] });
+        stage.add(far2.group);
+        const fd = b.mid * 1.25;
+        far2.update(1, new THREE.Vector3(0, EYE, fd));
+        shots.push(["card", fd, shoot(470, 420, (c) => { c.position.set(0, EYE + fd * 0.09, fd); c.lookAt(0, near.height * 0.5, 0); })]);
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:10px;flex-wrap:wrap;padding-top:8px";
+        for (const [label, dist, canvas] of shots) {
+          canvas.style.cssText = "border:1px solid #2a2f38;display:block";
+          const w = document.createElement("div");
+          w.innerHTML = `<div style="opacity:.5;padding:2px 0">${label} at ${dist.toFixed(0)} m (its own band)</div>`;
+          w.appendChild(canvas);
+          row.appendChild(w);
+        }
+        host.appendChild(row);
+        cardForest.dispose();
+        far2.dispose();
+        near.bark.dispose(); near.foliage.dispose();
+        mid.bark.dispose(); mid.foliage.dispose();
+      }
+
+      // --- the sheets --------------------------------------------------------
+      // Drawn on a mid-grey, not on the page's black: an alpha channel judged
+      // against black hides every soft edge it has, and soft edges are exactly
+      // what turns a spray into a smear at distance.
+      function drawSheets(host) {
+        host.innerHTML = "";
+        const show = (label, image, size) => {
+          const c = document.createElement("canvas");
+          c.width = c.height = size;
+          const g = c.getContext("2d");
+          g.fillStyle = "#6b6f74";
+          g.fillRect(0, 0, size, size);
+          g.drawImage(image, 0, 0, size, size);
+          c.style.cssText = "border:1px solid #2a2f38;display:block;image-rendering:pixelated";
+          const w = document.createElement("div");
+          w.innerHTML = `<div style="opacity:.55;padding:2px 0">${label}</div>`;
+          w.appendChild(c);
+          host.appendChild(w);
+        };
+        const mats = vegetationMaterials();
+        show("foliage atlas 512² — needleA · needleB / leaf · leafB", mats.foliage.map.image, 320);
+        show("bark 128², tiling both ways", mats.bark.map.image, 160);
+        for (const id of SPECIES_IDS) {
+          const sk = growTree(SPECIES[id], seedBase + 9973 + id.length * 131);
+          const { marks, trunk } = imposterMarks(sk);
+          const tex = imposterTexture(256, marks, trunk, SPECIES[id].kind, seedBase + 77 * id.length);
+          show(`card — ${id} · ${marks.length} marks (${imposterSize(sk).toFixed(1)} m square)`, tex.image, 160);
+          tex.dispose();
+        }
+      }
+
+      // --- the sky -----------------------------------------------------------
+      let cloudCost = null;
+      let cloudDiff = [];
+      function drawSky(host) {
+        host.innerHTML = "";
+        clearStage();
+        const tier = TIERS[tierName];
+        const ground = new THREE.Mesh(new THREE.PlaneGeometry(1400, 1400), dirt);
+        ground.geometry.rotateX(-Math.PI / 2);
+        ground.receiveShadow = true;
+        stage.add(ground);
+        // A stand on the skyline, because a cloud is judged against what it
+        // sits behind — an empty sky tells you nothing about whether the deck
+        // is fighting the panorama.
+        const ridge = [];
+        for (let i = 0; i < 90; i++) {
+          const a = (i / 90) * Math.PI * 2;
+          ridge.push({ species: i % 3 === 0 ? "pine" : "spruce", x: Math.cos(a) * 150, y: -1, z: Math.sin(a) * 150, scale: 1.2 });
+        }
+        const skyForest = createForest({ tier, placements: ridge });
+        stage.add(skyForest.group);
+
+        const sunDir = sun.position.clone().normalize();
+        const aim = (c) => {
+          c.position.set(0, 2, 0);
+          c.far = 600;
+          c.updateProjectionMatrix();
+          c.lookAt(120, 62, 40);
+          skyForest.update(1, c.position);
+        };
+        // The BEFORE frame — the same shot with no cloud volume in the scene at
+        // all. Everything below is measured against it, because "the clouds are
+        // in there somewhere" is not a claim a picture of a sky can settle: this
+        // sky is a generated panorama with real cirrus painted into it, and for
+        // three rounds this page showed a cloud pass that was returning zero
+        // while looking exactly like a sky full of cloud.
+        const bare = shoot(470, 320, aim);
+        const barePix = bare.getContext("2d").getImageData(0, 0, 470, 320).data;
+        const diffOf = (canvas) => {
+          const px = canvas.getContext("2d").getImageData(0, 0, 470, 320).data;
+          let sum = 0;
+          for (let i = 0; i < px.length; i += 4) {
+            sum += Math.abs(px[i] - barePix[i]) + Math.abs(px[i + 1] - barePix[i + 1]) + Math.abs(px[i + 2] - barePix[i + 2]);
+          }
+          return sum / (px.length / 4) / 3;
+        };
+        bare.style.cssText = "border:1px solid #2a2f38;display:block";
+        const bw = document.createElement("div");
+        bw.innerHTML = `<div style="opacity:.55;padding:2px 0">no clouds — the panorama alone</div>`;
+        bw.appendChild(bare);
+        host.appendChild(bw);
+        cloudDiff = [];
+        for (const cov of [0.22, 0.45, 0.72]) {
+          const clouds = createCloudSky({ tier, sun: sunDir, sunColor: 0xfff2df, haze: 0x94a4b2, coverage: cov });
+          cloudCost = clouds.cost;
+          scene.add(clouds.object);
+          const canvas = shoot(470, 320, (c) => {
+            aim(c);
+            clouds.update(11.5, c);
+          });
+          scene.remove(clouds.object);
+          clouds.dispose();
+          const d = diffOf(canvas);
+          cloudDiff.push([cov, d]);
+          canvas.style.cssText = "border:1px solid #2a2f38;display:block";
+          const w = document.createElement("div");
+          w.innerHTML = `<div style="opacity:.55;padding:2px 0">coverage ${cov}${cov === 0.45 ? " (default)" : ""} — ${d.toFixed(2)}/255 mean change</div>`;
+          w.appendChild(canvas);
+          host.appendChild(w);
+        }
+        skyForest.dispose();
+      }
+
+      // --- the numbers -------------------------------------------------------
+      function measure() {
+        out.textContent = "";
+        log(`TIER ${tierName} — dpr ${TIERS[tierName].dprCap} · shadows ${TIERS[tierName].shadowMapSize} · draw ×${TIERS[tierName].drawDistanceScale}`);
+        log("");
+        log("PER TREE, measured (seed 0 of each species; the near mesh is the whole tree,");
+        log("the mid mesh drops the branch sticks, the card is two crossed quads):");
+        log(`  ${"species".padEnd(12)} ${"near".padStart(7)} ${"mid".padStart(7)} ${"card".padStart(6)}   height   spread`);
+        for (const id of SPECIES_IDS) {
+          const p = SPECIES[id];
+          const sk = growTree(p, seedBase + 9973 + id.length * 131);
+          const n = buildTreeMesh(p, sk, detailFor(p, "near"));
+          const m = buildTreeMesh(p, sk, detailFor(p, "mid"));
+          log(`  ${id.padEnd(12)} ${String(n.triangles).padStart(7)} ${String(m.triangles).padStart(7)} ${"4".padStart(6)}   ${n.height.toFixed(1).padStart(5)} m ${n.spread.toFixed(1).padStart(6)} m`);
+          n.bark.dispose(); n.foliage.dispose(); m.bark.dispose(); m.foliage.dispose();
+        }
+        log("");
+        log("THE BAND TABLE — where each level takes over, per tier, and how many distinct");
+        log("trees per species get built there (variants; scale, yaw and tint vary on top):");
+        for (const [name, b] of Object.entries(BUDGET)) {
+          log(`  ${name.padEnd(13)} near < ${String(b.near).padStart(3)} m   mid < ${String(b.mid).padStart(3)} m   cull ${String(b.cull).padStart(3)} m   ${b.variants} variant(s)   mid shadows ${b.midShadows ? "on" : "off"}`);
+        }
+        if (forest) {
+          log("");
+          log(`THE HILLSIDE, LIVE — ${forest.stats.placements} trees placed, from the channel-floor camera:`);
+          log(`  ${forest.stats.near} at full detail · ${forest.stats.mid} mid · ${forest.stats.far} cards · ${forest.stats.culled} not drawn`);
+          log(`  ${forest.stats.triangles.toLocaleString()} triangles in ${forest.stats.drawCalls} instanced draw calls`);
+          log(`  (the old forest this replaces: 2 draw calls, ~44 tris a tree, and the player`);
+          log(`   called it out on sight — the trade this table is asking for is those draws.)`);
+        }
+        if (cloudCost) {
+          log("");
+          log("THE CLOUDS:");
+          log(`  ${cloudCost.steps} march steps · detail octave ${cloudCost.detail ? "on" : "off"}`);
+          log(`  noise built in ${cloudCost.noiseMs.toFixed(1)} ms, ${(cloudCost.noiseBytes / 1024).toFixed(0)} KB of texture, once per page`);
+          log(`  per tier: ${Object.entries(CLOUD_STEPS).map(([k, v]) => `${k} ${v.steps}${v.detail ? "+d" : ""}`).join(" · ")}`);
+          log(`  fill is (sky pixels × steps): the dome is depth-tested, so ground pixels cost nothing.`);
+          log(`  measured against the same frame with no cloud volume in the scene:`);
+          for (const [cov, d] of cloudDiff) {
+            log(`    coverage ${cov} → ${d.toFixed(2)}/255 mean pixel change${d < 0.5 ? "   ← THE PASS IS DOING NOTHING" : ""}`);
+          }
+        }
+      }
+
+      // --- controls ----------------------------------------------------------
+      const controls = document.getElementById("controls");
+      const button = (label, fn) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText = "font:600 12px ui-monospace,monospace;background:#20242c;color:#e8e4dc;border:1px solid #39404b;padding:4px 10px;cursor:pointer";
+        b.onclick = fn;
+        controls.appendChild(b);
+        return b;
+      };
+      const tierPick = document.createElement("select");
+      tierPick.style.cssText = "font:600 12px ui-monospace,monospace;background:#20242c;color:#e8e4dc;border:1px solid #39404b;padding:4px";
+      for (const name of Object.keys(TIERS)) {
+        const o = document.createElement("option");
+        o.value = o.textContent = name;
+        if (name === tierName) o.selected = true;
+        tierPick.appendChild(o);
+      }
+      tierPick.onchange = () => { tierName = tierPick.value; redraw(); };
+      controls.appendChild(tierPick);
+      button("next seeds ▸", () => { seedBase += 11; redraw(); });
+      button("◂ prev seeds", () => { seedBase = Math.max(0, seedBase - 11); redraw(); });
+      button("golden hour ⇄ midday", () => {
+        hour = hour === "midday" ? "golden" : "midday";
+        (hour === "midday" ? MIDDAY : GOLDEN)();
+        redraw();
+      });
+      const seedLabel = document.createElement("span");
+      seedLabel.style.cssText = "opacity:.5;padding:0 10px";
+      controls.appendChild(seedLabel);
+
+      function redraw() {
+        seedLabel.textContent = `seed base ${seedBase} · ${hour}`;
+        if (forest) { forest.dispose(); forest = null; }
+        drawHillside(document.getElementById("hill"));
+        drawStand(document.getElementById("stand"));
+        drawSheet(document.getElementById("sheet"));
+        drawLods(document.getElementById("lod"));
+        drawSheets(document.getElementById("sheets"));
+        drawSky(document.getElementById("sky"));
+        measure();
+      }
+
+      Object.assign(window, { THREE, vegScene: scene, vegRenderer: renderer, vegRedraw: redraw, SPECIES, createForest, createTree, createCloudSky });
+
+      redraw();
+      document.body.dataset.ready = "1";
+
+      // The real panorama, behind everything above — then re-shoot, because a
+      // cloud over a flat blue wash and a cloud over a generated sky are two
+      // different pictures and only the second one is the claim.
+      import("/src/world/map2/dressing.ts")
+        .then((m) => m.dressSky(scene, TIERS[tierName]))
+        .then(() => {
+          drawSky(document.getElementById("sky"));
+          drawHillside(document.getElementById("hill"));
+          measure();
+          log("");
+          log("the generated panorama landed — the sky and hillside shots above are over the REAL");
+          log("background and environment light (map 2's own dressSky, untouched by this lane).");
+          document.body.dataset.ready = "2";
+        })
+        .catch((e) => {
+          log("");
+          log(`dressSky failed (offline?) — the sky shots are over the flat stand-in wash: ${e}`);
+        });
+    </script>
+  </body>
+</html>

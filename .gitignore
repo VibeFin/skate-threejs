@@ -1,0 +1,60 @@
+# genex local metadata + secrets — never publish
+.genex/
+.env
+.env.*
+!.env.example
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# genex motion working files (raw takes are on R2, not the repo)
+takes/
+
+# local animation review tooling (never shipped)
+tools/candidates/
+
+# MY OWN VERIFICATION CAPTURES — 80 folders, 4.8 GB, and every byte of it was
+# riding along in `genex preview`'s source push. That is almost certainly what
+# "✗ Couldn't save your game's source" was: the build deploys fine (it is built
+# from src/ and public/), then the source push tries to move nearly five
+# gigabytes of PNG through git-lfs and gives up, and the publish that follows
+# 409s with "No uploaded build for this commit".
+#
+# Nothing in the game reads this directory — checked, it appears only in prose.
+# The files stay on disk; they are just not part of the game's source any more.
+# Regenerable by definition: they are screenshots of the game.
+shots/
+
+# Scratch left over from a debugging session, one of them empty.
+before.txt
+err.txt
+
+# Embedded git repos — reference clones, not part of this game.
+.claude/reference/ez-tree/
+.claude/skills/img2threejs/
+
+# Reference material, not part of the game — screenshots and video takes used
+# while building. Nothing in src/ reads them.
+bar/
+*.mov

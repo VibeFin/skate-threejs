@@ -1,0 +1,260 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>ride jitter probe</title></head>
+  <body style="margin:0;background:#171a20;color:#fff;font:600 12px ui-monospace,monospace">
+    <pre id="out" style="padding:12px;line-height:1.5">measuring…</pre>
+    <script type="module">
+      // Steps the REAL skate model + rig + animation layer at a fixed 1/60 and
+      // reports per-frame movement, with the skater doing nothing but rolling.
+      // A stance loop should be almost perfectly still frame to frame; anything
+      // that spikes names the frame the jitter happens on.
+      import * as THREE from "three";
+      import { SkateModel } from "/src/skate/skate-model.ts";
+      import { SkaterRig } from "/src/skate/skater-rig.ts";
+      import { SkaterAnim, RIDE_HAND_CLIP, OLLIE_HAND_CLIP, PUSH_HAND_CLIP } from "/src/skate/skater-anim.ts";
+
+      const out = document.getElementById("out");
+      const log = (s) => (out.textContent += "\n" + s);
+      out.textContent = "";
+
+      // Absolute, NOT document-relative — this page is served from /tools/, so
+      // "./assets/x.glb" would 404 here and the probe would silently measure a
+      // rig with no clips on it.
+      const abs = (u) => (u.startsWith("http") ? u : new URL(u.replace(/^\.\//, "/"), location.origin).href);
+      const CHAR = "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/rigged-character.glb";
+      const SET = "/motion-sets/skate.json";
+
+      // A second, IDENTICAL skater with no hand clips attached at all — it can
+      // only ever show the compiled motion set. Comparing the real skater
+      // against both this and the bare-rig clip says which source is winning
+      // on any given frame.
+      const idleOnly = await SkaterAnim.create(CHAR, SET);
+
+      const anim = await SkaterAnim.create(CHAR, SET);
+      const bound = {
+        ride: await anim.attachHandClip("ride", { ...RIDE_HAND_CLIP, url: abs(RIDE_HAND_CLIP.url) }),
+        ollie: await anim.attachHandClip("ollie", { ...OLLIE_HAND_CLIP, url: abs(OLLIE_HAND_CLIP.url) }),
+        push: await anim.attachHandClip("push", { ...PUSH_HAND_CLIP, url: abs(PUSH_HAND_CLIP.url) }),
+      };
+      log("clips bound: " + JSON.stringify(bound));
+      if (!bound.ride) throw new Error("ride clip did not bind — measurement would be meaningless");
+
+      const scene = new THREE.Scene();
+      const rig = new SkaterRig(scene);
+      rig.setCharacter(anim.model, -Math.PI / 2);
+      const skate = new SkateModel();
+      skate.speed = 6; // rolling, no input, no push, no trick
+
+      const IDLE_INPUT = {
+        throttle: false, brake: false, steer: 0,
+        olliePressed: false, kickflipPressed: false,
+      };
+
+      const DT = 1 / 60;
+      const FRAMES = Number(new URLSearchParams(location.search).get("frames") ?? 480);
+
+      const hips = anim.model.getObjectByName("Hips");
+      const chest =
+        anim.model.getObjectByName("Spine2") ??
+        anim.model.getObjectByName("Spine1") ??
+        anim.model.getObjectByName("Spine");
+      const idleHips = idleOnly.model.getObjectByName("Hips");
+      const lfoot = anim.model.getObjectByName("LeftFoot");
+      const lfootBone = lfoot;
+      const rfootBone = anim.model.getObjectByName("RightFoot");
+
+      // Every bone, so a spike can be attributed to the joint that caused it
+      // instead of guessing between "the clip" and "the code blending it".
+      const allBones = [];
+      anim.model.traverse((o) => { if (o.isBone) allBones.push(o); });
+      const lastQ = allBones.map(() => new THREE.Quaternion());
+      let primed = false;
+      const worstBone = () => {
+        let name = "-", worst = 0;
+        for (let i = 0; i < allBones.length; i++) {
+          const d = primed ? lastQ[i].angleTo(allBones[i].quaternion) * 180 / Math.PI : 0;
+          if (d > worst) { worst = d; name = allBones[i].name; }
+          lastQ[i].copy(allBones[i].quaternion);
+        }
+        primed = true;
+        return { name, deg: worst };
+      };
+      const prev = {};
+      const rows = [];
+      const w = new THREE.Vector3();
+      const inv = new THREE.Matrix4();
+
+      // Everything is measured in the BOARD's frame, so the skater's forward
+      // travel cancels out and only the wobble relative to the deck is left.
+      const sample = (name, obj) => {
+        w.setFromMatrixPosition(obj.matrixWorld).applyMatrix4(inv);
+        const d = prev[name] ? w.distanceTo(prev[name]) * 1000 : 0; // mm
+        prev[name] = w.clone();
+        return d;
+      };
+
+      // Scripted moves, so the END of each one can be inspected — that is where
+      // the body changes hands and where a stray pose would show.
+      const PUSH_SPAN = 0.85; // what the game actually passes (PUSH_INTERVAL)
+      const EVENTS = [
+        { f: 120, name: "push", go: () => anim.startPush(PUSH_SPAN) },
+        { f: 300, name: "ollie", go: () => anim.playTrick("Ollie", 0.8) },
+        { f: 460, name: "kickflip", go: () => anim.playTrick("Kickflip", 0.85) },
+      ];
+
+      for (let f = 0; f < FRAMES; f++) {
+        const ev = EVENTS.find((e) => e.f === f);
+        if (ev) ev.go();
+        skate.update(IDLE_INPUT, DT);
+        rig.sync(skate, DT);
+        anim.update(DT);
+        rig.followFeet(anim, skate, DT);
+        rig.root.updateMatrixWorld(true);
+        inv.copy(rig.root.matrixWorld).invert();
+        idleOnly.update(DT);
+        // Feet in the rig's own frame, so the push can be judged the same way
+        // the raw clip was measured in tools/push-feet.html.
+        anim.model.updateMatrixWorld(true);
+        const lLocal = anim.model.worldToLocal(new THREE.Vector3().setFromMatrixPosition(lfootBone.matrixWorld));
+        const rLocal = anim.model.worldToLocal(new THREE.Vector3().setFromMatrixPosition(rfootBone.matrixWorld));
+        const wb = worstBone();
+        rows.push({
+          f,
+          t: f * DT,
+          char: sample("char", rig.character),
+          hips: sample("hips", hips),
+          foot: sample("foot", lfoot),
+          bone: wb.name,
+          deg: wb.deg,
+          // How far the live Hips pose sits from the compiled-set-only skater.
+          // ~0 means the compiled loop is what you are seeing this frame.
+          vsIdle: (hips.quaternion.angleTo(idleHips.quaternion) * 180) / Math.PI,
+          lLocal,
+          rLocal,
+          // Where his body sits relative to the BOARD. This is the number the
+          // player sees as "he slid forward-left off the deck mid-push".
+          cLocal: rig.character.position.clone(),
+          // …and the same question asked of the BODY rather than the node the
+          // body hangs off. The node can be pinned while the pose still walks
+          // the torso around, so this is the one the player actually sees.
+          hLocal: new THREE.Vector3().setFromMatrixPosition(hips.matrixWorld).applyMatrix4(inv),
+          chestLocal: chest
+            ? new THREE.Vector3().setFromMatrixPosition(chest.matrixWorld).applyMatrix4(inv)
+            : new THREE.Vector3(),
+        });
+      }
+
+      // Ignore the first 30 frames — the clip's fade-in is legitimate movement.
+      const body = rows.slice(30);
+      const stat = (k) => {
+        const v = body.map((r) => r[k]);
+        const mean = v.reduce((a, b) => a + b, 0) / v.length;
+        const max = Math.max(...v);
+        return { mean, max, at: body[v.indexOf(max)].t };
+      };
+      for (const k of ["char", "hips", "foot"]) {
+        const s = stat(k);
+        log(`${k.padEnd(5)} mean ${s.mean.toFixed(2)} mm/frame   max ${s.max.toFixed(2)} mm at t=${s.at.toFixed(2)}s`);
+      }
+
+      // Spikes: frames moving far more than typical. A clean loop has none.
+      const cm = stat("char").mean;
+      const spikes = body.filter((r) => r.char > Math.max(0.5, cm * 6));
+      log(`\nspike frames (char > 6x mean): ${spikes.length}`);
+      spikes.slice(0, 24).forEach((r) =>
+        log(`   t=${r.t.toFixed(3)}s  clip t=${(RIDE_HAND_CLIP.start + (r.t % (RIDE_HAND_CLIP.end - RIDE_HAND_CLIP.start))).toFixed(3)}s  char ${r.char.toFixed(1)} mm  worst bone: ${r.bone} ${r.deg.toFixed(1)}°  hips-vs-compiled-loop ${r.vsIdle.toFixed(1)}°`));
+
+      // Any frame where the live pose collapses onto the compiled-set-only twin
+      // is a frame the player sees the OLD generated loop instead of the stance.
+      const leak = rows.filter((r) => r.f > 40 && r.vsIdle < 15);
+      log(`\nframes showing the OLD compiled pose (hips within 15° of the compiled-only twin): ${leak.length}`);
+      const runs = [];
+      leak.forEach((r) => {
+        const last = runs[runs.length - 1];
+        if (last && r.f === last.end + 1) last.end = r.f;
+        else runs.push({ start: r.f, end: r.f });
+      });
+      runs.forEach((g) => {
+        const after = EVENTS.filter((e) => e.f <= g.start).pop();
+        log(`   t=${(g.start * DT).toFixed(2)}s → ${(g.end * DT).toFixed(2)}s  (${((g.end - g.start + 1) * DT * 1000).toFixed(0)} ms)  after: ${after ? after.name : "—"}`);
+      });
+
+      // --- the push, judged on the same two numbers the clip was judged on ---
+      const pushEv = EVENTS.find((e) => e.name === "push");
+      const win = rows.filter((r) => r.f >= pushEv.f && r.f <= pushEv.f + (PUSH_SPAN + 0.4) / DT);
+      const ax = (get) => {
+        const a = win.map(get);
+        return { min: Math.min(...a), max: Math.max(...a), range: Math.max(...a) - Math.min(...a) };
+      };
+      log(`\nPUSH, as the game plays it (${win.length} frames):`);
+      const cx = ax((r) => r.cLocal.x), cz = ax((r) => r.cLocal.z);
+      log(`   the character NODE vs the board: ${(cx.range * 100).toFixed(1)} cm sideways, ${(cz.range * 100).toFixed(1)} cm fore/aft`);
+      const hx = ax((r) => r.hLocal.x), hz = ax((r) => r.hLocal.z);
+      const ex = ax((r) => r.chestLocal.x), ez = ax((r) => r.chestLocal.z);
+      log(`   HIS HIPS vs the board:  ${(hx.range * 100).toFixed(1)} cm sideways, ${(hz.range * 100).toFixed(1)} cm fore/aft  ← what the player sees`);
+      log(`   HIS CHEST vs the board: ${(ex.range * 100).toFixed(1)} cm sideways, ${(ez.range * 100).toFixed(1)} cm fore/aft`);
+      log(`   fore/aft trace (cm along the board, 0 = where the push began):`);
+      const hz0 = win[0].hLocal.z, ez0 = win[0].chestLocal.z, fz0 = win[0].lLocal.z;
+      log(`      t      hips   chest   front foot`);
+      win.filter((_, i) => i % 3 === 0).forEach((r) =>
+        log(
+          `      ${((r.f - pushEv.f) * DT).toFixed(2)}s  ` +
+            `${((r.hLocal.z - hz0) * 100).toFixed(1).padStart(6)}  ` +
+            `${((r.chestLocal.z - ez0) * 100).toFixed(1).padStart(6)}  ` +
+            `${((r.lLocal.z - fz0) * 100).toFixed(1).padStart(6)}`,
+        ));
+      const lz = ax((r) => r.lLocal.z), lx = ax((r) => r.lLocal.x);
+      log(`   planted foot travel:  ${(lx.range * 100).toFixed(1)} cm across, ${(lz.range * 100).toFixed(1)} cm along the board`);
+      const ly = ax((r) => r.lLocal.y);
+      // The power stroke is the first ~40% (the foot travelling backwards); the
+      // rest is the recovery swing, which SHOULD lift and clear. Judge them apart.
+      const cut = pushEv.f + 0.4 * (0.45 / DT);
+      const hi = (rs) => Math.max(...rs.map((r) => r.rLocal.y));
+      const stroke = win.filter((r) => r.f <= cut);
+      const swing = win.filter((r) => r.f > cut);
+      log(`   sweeping foot, POWER STROKE: peaks ${((hi(stroke) - ly.min) * 100).toFixed(1)} cm off the ground  (wants ≈0 — this is the "pushing in the air")`);
+      log(`   sweeping foot, recovery swing: peaks ${((hi(swing) - ly.min) * 100).toFixed(1)} cm  (should stay high — that's the foot clearing)`);
+
+      const calm = body.filter((r) => r.char < 3);
+      const calmMean = calm.reduce((a, r) => a + r.vsIdle, 0) / calm.length;
+      const spikeMean = spikes.reduce((a, r) => a + r.vsIdle, 0) / spikes.length;
+      log(`\nHips distance from the compiled-loop-only skater:`);
+      log(`   on calm frames  ${calmMean.toFixed(1)}°   (big = the ride clip is winning, as it should)`);
+      log(`   on spike frames ${spikeMean.toFixed(1)}°   (small = the compiled loop took the body back)`);
+
+      const bigBone = [...body].sort((a, b) => b.deg - a.deg).slice(0, 8);
+      log(`\nlargest single-frame bone rotations:`);
+      bigBone.forEach((r) => log(`   t=${r.t.toFixed(3)}s  ${r.bone} ${r.deg.toFixed(1)}°  (char moved ${r.char.toFixed(1)} mm)`));
+
+      log("\nfirst 12 frames after settle:");
+      body.slice(0, 12).forEach((r) => log(`   t=${r.t.toFixed(3)}  char ${r.char.toFixed(3)}  hips ${r.hips.toFixed(3)}  foot ${r.foot.toFixed(3)}`));
+
+      // --- CONTROL: the clip on a bare rig, no game code in the way ---------
+      // Same scrub pattern, a fresh mixer, nothing else touching the bones. If
+      // this is smooth, the fault is in how the game blends the clip; if it
+      // snaps here too, the fault is in the clip or the mixer driving it.
+      const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+      const gl = new GLTFLoader();
+      const [charG, rideG] = await Promise.all([gl.loadAsync(CHAR), gl.loadAsync(abs(RIDE_HAND_CLIP.url))]);
+      const cRoot = charG.scene;
+      const cMixer = new THREE.AnimationMixer(cRoot);
+      cMixer.clipAction(rideG.animations[0]).play();
+      const cHips = cRoot.getObjectByName("Hips");
+      const cq = new THREE.Quaternion();
+      let cPrev = null, cWorst = 0, cWorstT = 0, cMean = 0, n = 0;
+      const span = RIDE_HAND_CLIP.end - RIDE_HAND_CLIP.start;
+      for (let f = 0; f < FRAMES; f++) {
+        const elapsed = (f * DT) % span;
+        cMixer.setTime(RIDE_HAND_CLIP.start + elapsed);
+        cq.copy(cHips.quaternion);
+        if (cPrev) {
+          const d = (cPrev.angleTo(cq) * 180) / Math.PI;
+          if (f > 30) { cMean += d; n++; if (d > cWorst) { cWorst = d; cWorstT = f * DT; } }
+        }
+        cPrev = cq.clone();
+      }
+      log(`\nCONTROL — ride clip alone on a bare rig, same scrub:`);
+      log(`   Hips mean ${(cMean / n).toFixed(3)}°/frame   max ${cWorst.toFixed(2)}° at t=${cWorstT.toFixed(2)}s`);
+    </script>
+  </body>
+</html>

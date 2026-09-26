@@ -1,0 +1,72 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>hud check</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Anton&family=Barlow+Condensed:wght@500;600;700&display=swap"
+      rel="stylesheet" />
+  </head>
+  <body style="margin:0;background:#3a4a2e">
+    <!-- The REAL Hud over a flat field-ish colour, driven by hand. The combo
+         readout only exists across time, so a still of one state proves
+         nothing on its own — step the beats and capture each. -->
+    <!-- Parked mid-screen: the readouts this page exists to look at live in the
+         corners, and a toolbar sitting on top of the combo line hides the exact
+         thing being checked. -->
+    <div id="deck" style="position:fixed;z-index:99;left:50%;transform:translateX(-50%);top:44%;
+      width:60vw;display:flex;gap:4px;flex-wrap:wrap;justify-content:center;
+      font:600 11px ui-monospace,monospace"></div>
+    <script type="module">
+      import { Hud } from "/src/ui/hud.ts";
+
+      const hud = new Hud();
+      hud.hideLoader();
+      hud.setVisible(true);
+      // On the page object so a whole combo can be driven and measured from one
+      // console call — six agents are editing src/, and every save reloads this
+      // page, which loses any state built up by clicking.
+      window.hud = hud;
+
+      let speed = 11;
+      let balance = null;
+      let drift = 0;
+
+      const beats = {
+        "link kickflip": () => hud.addLink("Kickflip", 250),
+        "link 360 heelflip": () => hud.addLink("360 Heelflip", 375),
+        "spin 360": () => hud.addSpin(360),
+        "link 50-50": () => hud.addLink("50-50", 300),
+        "link manual": () => hud.addLink("Manual", 120),
+        "bank x3": () => hud.bankCombo(3),
+        "lose": () => hud.loseCombo(),
+        "balance on": () => { balance = 0; drift = 0.35; },
+        "balance off": () => { balance = null; hud.setBalance(null); },
+        "switch": () => hud.setStance("switch"),
+        "regular": () => hud.setStance("regular"),
+        "reset run": () => { hud.resetRun(); balance = null; },
+      };
+      for (const [name, fn] of Object.entries(beats)) {
+        const b = document.createElement("button");
+        b.textContent = name;
+        b.onclick = fn;
+        document.getElementById("deck").appendChild(b);
+      }
+
+      let last = performance.now();
+      const tick = () => {
+        const now = performance.now();
+        const dt = Math.min((now - last) / 1000, 0.1);
+        last = now;
+        if (balance !== null) {
+          balance += drift * dt;
+          if (Math.abs(balance) > 0.95) drift = -drift;
+          hud.setBalance(balance);
+        }
+        hud.update(speed, dt);
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>

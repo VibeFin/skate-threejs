@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>push feet probe</title></head>
+  <body style="margin:0;background:#171a20;color:#fff;font:600 12px ui-monospace,monospace">
+    <pre id="out" style="padding:12px;line-height:1.45">measuring…</pre>
+    <script type="module">
+      // Where the feet actually go during the push, in the BOARD's frame:
+      // +z = toward the nose, +x = across the deck, y = height. Answers two
+      // questions the eye can only guess at — how far the planted foot slides,
+      // and how far the sweeping foot stays off the ground.
+      import * as THREE from "three";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+      import { PUSH_HAND_CLIP } from "/src/skate/skater-anim.ts";
+
+      const out = document.getElementById("out");
+      const log = (s) => (out.textContent += "\n" + s);
+      out.textContent = "";
+
+      const CHAR = "https://assets.auras.cc/generations/cms0fbiar004o22nuyjqjhzuz/rigged-character.glb";
+      const p = new URLSearchParams(location.search);
+      const CLIP = p.get("glb") ?? PUSH_HAND_CLIP.url.replace(/^\.\//, "/");
+      const FROM = Number(p.get("from") ?? PUSH_HAND_CLIP.start);
+      const TO = Number(p.get("to") ?? PUSH_HAND_CLIP.end);
+
+      const loader = new GLTFLoader();
+      const [char, clipGltf] = await Promise.all([loader.loadAsync(CHAR), loader.loadAsync(CLIP)]);
+      const root = char.scene;
+      root.rotation.y = -Math.PI / 2; // the yaw the game places the rig at
+      const mixer = new THREE.AnimationMixer(root);
+      mixer.clipAction(clipGltf.animations[0]).play();
+
+      const L = root.getObjectByName("LeftFoot");
+      const R = root.getObjectByName("RightFoot");
+      const LT = root.getObjectByName("LeftToeBase");
+      const RT = root.getObjectByName("RightToeBase");
+
+      const v = new THREE.Vector3();
+      const pos = (o) => { v.setFromMatrixPosition(o.matrixWorld); return v.clone(); };
+      // Sole = middle of ankle→toe, the same anchor the game stands the board on.
+      const sole = (a, t) => pos(a).add(pos(t)).multiplyScalar(0.5);
+
+      const N = 40;
+      const rows = [];
+      for (let i = 0; i <= N; i++) {
+        const t = FROM + ((TO - FROM) * i) / N;
+        mixer.setTime(t);
+        root.updateMatrixWorld(true);
+        rows.push({ t, l: sole(L, LT), r: sole(R, RT) });
+      }
+
+      const span = (get) => {
+        const a = rows.map(get);
+        return { min: Math.min(...a), max: Math.max(...a), range: Math.max(...a) - Math.min(...a) };
+      };
+
+      log(`clip ${CLIP}   range ${FROM}s → ${TO}s   (${rows.length} samples)\n`);
+      log(`LEFT sole  (the planted foot)`);
+      for (const ax of ["x", "y", "z"]) {
+        const s = span((r) => r.l[ax]);
+        log(`   ${ax}: ${(s.min * 100).toFixed(1)} … ${(s.max * 100).toFixed(1)} cm    travel ${(s.range * 100).toFixed(1)} cm`);
+      }
+      log(`\nRIGHT sole  (the sweeping foot)`);
+      for (const ax of ["x", "y", "z"]) {
+        const s = span((r) => r.r[ax]);
+        log(`   ${ax}: ${(s.min * 100).toFixed(1)} … ${(s.max * 100).toFixed(1)} cm    travel ${(s.range * 100).toFixed(1)} cm`);
+      }
+
+      const lY = span((r) => r.l.y);
+      const rY = span((r) => r.r.y);
+      log(`\nground gap: the sweeping foot's LOWEST point sits ${((rY.min - lY.min) * 100).toFixed(1)} cm above the planted foot's lowest point`);
+
+      log(`\nper-sample trace  (z = toward the nose)`);
+      log(`    t      Lx     Ly     Lz   |   Rx     Ry     Rz`);
+      rows.forEach((r, i) => {
+        if (i % 2) return;
+        const f = (n) => (n * 100).toFixed(1).padStart(6);
+        log(`  ${r.t.toFixed(3)} ${f(r.l.x)}${f(r.l.y)}${f(r.l.z)}   |${f(r.r.x)}${f(r.r.y)}${f(r.r.z)}`);
+      });
+    </script>
+  </body>
+</html>

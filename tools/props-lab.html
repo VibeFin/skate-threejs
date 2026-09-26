@@ -1,0 +1,660 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>props lab — the procedural street furniture, at gameplay distance</title>
+    <!-- An empty icon, so the console this page gets judged from is not already
+         one 404 deep before anything has been measured. -->
+    <link rel="icon" href="data:," />
+  </head>
+  <body style="margin:0;background:#14161b;color:#e8e4dc;font:600 12px ui-monospace,monospace">
+    <div style="padding:12px">
+      <div style="opacity:.6;padding-bottom:6px">
+        THE LIBRARY — every factory in <b>src/world/procedural/</b>, built here, stood on the
+        spot's own concrete, lit by the game's OWN rig (createField's sun, hemisphere, fog and sky —
+        not a copy of its numbers), tone-mapped the way main.ts does it. Cameras are at skater eye
+        height and 4–15 m out, which is where a chase camera sees a prop from. Click a tile to blow
+        it up.
+      </div>
+      <div id="controls" style="display:flex;gap:14px;flex-wrap:wrap;padding:6px 0 10px;align-items:center"></div>
+      <div id="focus" style="padding-bottom:10px"></div>
+      <div style="opacity:.6;padding:8px 0 6px">THE PRINT ATLAS — every legend in the library on one 512&sup2; page, one material. If a sign reads wrong in a tile, look here first: it is either the cell or the UVs, and this tells you which.</div>
+      <div id="atlas"></div>
+      <div style="opacity:.6;padding:8px 0 6px">THE LINE-UP — all of them together from the SHADE side, so scale, silhouette and the shadow-side read can be judged against each other. The striped pole is 1.75 m, a rider.</div>
+      <div id="lineup" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div style="opacity:.6;padding:14px 0 6px">THE CONTACT SHEET — each factory at several seeds, from the SUN side. Two seeds that look the same are a bug.</div>
+      <div id="sheet" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+      <div style="opacity:.6;padding:14px 0 0">
+        THE NUMBERS — cost per factory, the stated envelope against the real geometry, and the
+        COLLIDER GATE. The collider is the only number in the library the physics reads, and no
+        picture can check it: a landing surface twenty centimetres above a cabinet roof looks
+        exactly like one on it. So every rideable prop gets a grid of rays dropped through its own
+        collider footprint, and the row is red unless the height the board would rest at is the
+        height of the geometry under it. It asks for that collider through <b>both</b> spellings the
+        two levels use and fails the row if they are not the same object — this page was 100% green
+        for weeks while the street it was green about was 34/41 wrong, because it asked one and the
+        game asked the other.
+      </div>
+    </div>
+    <pre id="out" style="padding:12px;line-height:1.55">measuring…</pre>
+    <script type="module">
+      // The prop library, taken apart three ways.
+      //
+      // 1. THE LINE-UP. Everything standing together on one strip. Scale errors
+      //    are invisible in isolation and obvious in a row — a mailbox the size
+      //    of a wheelie bin only reads as wrong next to the wheelie bin.
+      // 2. THE CONTACT SHEET. Each factory at three seeds, framed at the
+      //    distance a chase camera actually sees it from. A prop that holds up
+      //    in an orbit viewer at 2 m and falls apart at 8 is a prop that fails
+      //    in the game, and 2 m is not a distance this game ever renders.
+      // 3. THE NUMBERS. Triangles, meshes, materials and draw calls per
+      //    factory, plus the measured bounding envelope over 64 seeds against
+      //    the one `index.ts` states. A stated bound that the geometry does not
+      //    fit inside is a red row — lane B spaces its placements on those
+      //    numbers, so they have to be true rather than plausible.
+      // 4. THE RAY PROBE. The collider is the only number in the library the
+      //    PHYSICS reads, and a picture cannot show whether it is right: a
+      //    landing surface 20 cm above a cabinet roof looks exactly like a
+      //    landing surface on it. So every rideable prop gets a grid of rays
+      //    dropped through its own collider footprint, and the row is red
+      //    unless the height the board would rest at is the height of the
+      //    geometry under it.
+      //
+      //    It asks for that collider the way the GAME asks — through both
+      //    spellings, and it fails the row if they are not the same object.
+      //    This page used to ask `streetPropCollider(id, seed)` while the two
+      //    levels read `STREET_PROPS[id].collider`, and those were different
+      //    numbers: the page printed 0 failures over 20 families for weeks
+      //    while 34 of the 41 solids the game actually built were wrong. A
+      //    harness that asks a question the game does not ask is not a harness.
+      // 5. THE STREET AS PLACED. Everything above is per family. This section
+      //    builds `spot.ts`'s own STREET_PLACEMENTS list, seeds and all, and
+      //    prints what the map really costs and what every placed prop's
+      //    collider really is — because "forty props" was never the map and a
+      //    budget stated for forty is a budget for a different game.
+      //
+      // The light rig is BORROWED, not restated: this page calls the game's own
+      // createField() and then hides the spot's geometry, so the sun, the
+      // hemisphere split, the fog and the sky are the ones the game ships and
+      // cannot drift from them.
+      //
+      // THREE comes through vite's own resolution, the way `src/` gets it. The
+      // page used to import /node_modules/three/build/three.module.js directly
+      // and so ran two copies of the engine at once — it rendered, but a review
+      // page judging props built against a different copy of three than the one
+      // it renders with is a review page that can be wrong in ways nobody can
+      // see. Everything else is absolute because this page is served from
+      // /tools/, not from the root.
+      import * as THREE from "three";
+      import { createField, dressField } from "/src/world/field.ts";
+      import { STREET_PROPS, STREET_PROP_IDS, buildStreetProp, streetPropCollider, propMaterials } from "/src/world/procedural/index.ts";
+      import { CELL } from "/src/world/procedural/mats.ts";
+      import { STREET_PLACEMENTS } from "/src/world/spot.ts";
+      import { TIERS } from "/src/controllers/quality/tier.ts";
+
+      const out = document.getElementById("out");
+      const log = (s) => (out.textContent += "\n" + s);
+      out.textContent = "";
+
+      // --- the stage --------------------------------------------------------
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      // main.ts's own baseline. A prop judged under a different exposure is a
+      // prop judged in a different game.
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.12;
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+      const scene = new THREE.Scene();
+      const tier = TIERS["desktop-high"];
+      const field = createField(scene, tier);
+      const spot = scene.getObjectByName("street-spot");
+      spot.visible = false;
+
+      // The floor the props stand on is the plaza's own concrete material, with
+      // world-metre UVs baked the way spot.ts bakes them (one tile is one 4 m
+      // slab), so the ground under a prop is the ground it will be placed on.
+      const groundGeo = new THREE.PlaneGeometry(160, 160);
+      groundGeo.rotateX(-Math.PI / 2);
+      const guv = groundGeo.getAttribute("uv");
+      // 160 m over spot.ts's own 4.5 m concrete tile.
+      for (let i = 0; i < guv.count; i++) guv.setXY(i, (guv.getX(i) * 160) / 4.5, (guv.getY(i) * 160) / 4.5);
+      const ground = new THREE.Mesh(groundGeo, field.materials.concrete);
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      // A stub of brick for the wall props, in the spot's own brick material at
+      // the spot's own tile size — an AC unit floating in mid-air tells a critic
+      // nothing about whether it sits on a wall properly.
+      const wallGeo = new THREE.PlaneGeometry(5, 5);
+      const wuv = wallGeo.getAttribute("uv");
+      for (let i = 0; i < wuv.count; i++) wuv.setXY(i, (wuv.getX(i) * 5) / 9, (wuv.getY(i) * 5) / 9);
+      const wall = new THREE.Mesh(wallGeo, field.materials.brick);
+      wall.position.set(0, 2.5, -0.03);
+      wall.receiveShadow = true;
+      wall.visible = false;
+      scene.add(wall);
+
+      const stage = new THREE.Group();
+      scene.add(stage);
+      const clearStage = () => {
+        while (stage.children.length) stage.remove(stage.children[0]);
+      };
+
+      /** A 1.75 m rider-height pole. Page furniture, not part of the library. */
+      const poleMats = [
+        new THREE.MeshStandardMaterial({ color: 0xd8d2c4, roughness: 0.7 }),
+        new THREE.MeshStandardMaterial({ color: 0xb8352c, roughness: 0.7 }),
+      ];
+      function scalePole() {
+        const g = new THREE.Group();
+        for (let i = 0; i < 7; i++) {
+          const m = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.25, 0.055), poleMats[i % 2]);
+          m.position.y = 0.125 + i * 0.25;
+          m.castShadow = true;
+          g.add(m);
+        }
+        return g;
+      }
+
+      // --- framing ----------------------------------------------------------
+      const FOV = 62; // main.ts's camera
+      const EYE = 1.55; // skater eye height
+      function frame(cam, box, azimuth) {
+        const sphere = box.getBoundingSphere(new THREE.Sphere());
+        const fovY = (FOV * Math.PI) / 180;
+        const fovX = 2 * Math.atan(Math.tan(fovY / 2) * cam.aspect);
+        const fit = sphere.radius / Math.tan(Math.min(fovY, fovX) / 2);
+        // 4 m is as close as a chase camera ever gets; past 15 m a prop is
+        // scenery and this page is not the place to judge it.
+        const d = Math.max(4.0, Math.min(15, fit * 1.16));
+        const ty = Math.min(sphere.center.y, 2.1);
+        cam.position.set(
+          sphere.center.x + Math.sin(azimuth) * d,
+          EYE + Math.max(0, ty - 1.2) * 0.55,
+          sphere.center.z + Math.cos(azimuth) * d,
+        );
+        cam.lookAt(sphere.center.x, ty, sphere.center.z);
+        return d;
+      }
+
+      function shoot(w, h, box, azimuth) {
+        renderer.setSize(w, h, false);
+        const cam = new THREE.PerspectiveCamera(FOV, w / h, 0.1, 400);
+        const d = frame(cam, box, azimuth);
+        renderer.render(scene, cam);
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(renderer.domElement, 0, 0);
+        return { canvas: c, distance: d };
+      }
+
+      // --- the library, built ------------------------------------------------
+      let seedBase = 0;
+      const count = (root) => {
+        let tris = 0, meshes = 0;
+        const mats = new Set();
+        root.traverse((o) => {
+          if (!o.isMesh) return;
+          meshes++;
+          mats.add(o.material);
+          const g = o.geometry;
+          tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+        });
+        return { tris, meshes, mats: mats.size };
+      };
+
+      /** How many seeds of this one fit in a tile without leaving 15 m. */
+      const seedsFor = (id) => {
+        const b = STREET_PROPS[id].bounds;
+        return Math.max(1, Math.min(3, Math.floor(6.5 / (2 * b.hx + 0.4))));
+      };
+
+      function stageProp(id, seeds, spacing) {
+        clearStage();
+        const box = new THREE.Box3();
+        const pitch = spacing ?? Math.max(1.1, 2 * STREET_PROPS[id].bounds.hx + 0.7);
+        const x0 = (-(seeds.length - 1) * pitch) / 2;
+        for (const [i, seed] of seeds.entries()) {
+          const p = buildStreetProp(id, seed);
+          p.position.x = x0 + i * pitch;
+          stage.add(p);
+          box.expandByObject(p);
+        }
+        const pole = scalePole();
+        pole.position.set(x0 - pitch * 0.55, 0, 0.2);
+        stage.add(pole);
+        box.expandByObject(pole);
+        // A wall prop gets a wall. It is not in the framing box — the wall is
+        // context, and letting 5 m of brick set the camera distance would push
+        // every one of these out past the range this page exists to check.
+        wall.visible = STREET_PROPS[id].mount === "wall";
+        wall.scale.x = Math.max(1, (seeds.length * pitch + 2) / 5);
+        return box;
+      }
+
+      // --- the sheet ---------------------------------------------------------
+      const sheet = document.getElementById("sheet");
+      const focus = document.getElementById("focus");
+      const lineup = document.getElementById("lineup");
+      const TILE_W = 470, TILE_H = 264;
+      // Two viewpoints, on purpose. The sheet stands on the SUN side, where a
+      // material shows what it is; the line-up stands on the SHADE side, where
+      // the cool hemisphere fill is all a face gets and a paint colour that is
+      // too dark turns the prop into a silhouette. Both are frames this game
+      // renders, and a prop has to survive the second one too. The sun is at
+      // -160 deg (field.ts), so this is about 50 deg off the key.
+      const SUN_SIDE = -1.05;
+      const SHADE_SIDE = 0.34;
+
+      function bigShot(id) {
+        const seeds = [0, 1, 2].map((k) => seedBase + k * 7 + 1);
+        const box = stageProp(id, seeds.slice(0, seedsFor(id)));
+        const { canvas, distance } = shoot(1440, 620, box, SUN_SIDE);
+        const p = STREET_PROPS[id];
+        focus.innerHTML =
+          `<div style="opacity:.55;padding:2px 0">FOCUS — <b>${id}</b> · ${p.what} · ` +
+          `camera ${distance.toFixed(1)} m · seeds ${seeds.slice(0, seedsFor(id)).join(", ")}</div>`;
+        canvas.style.cssText = "width:100%;max-width:1440px;border:1px solid #2a2f38";
+        focus.appendChild(canvas);
+      }
+
+      function drawSheet() {
+        sheet.innerHTML = "";
+        for (const id of STREET_PROP_IDS) {
+          const n = seedsFor(id);
+          const seeds = Array.from({ length: n }, (_, k) => seedBase + k * 7 + 1);
+          const box = stageProp(id, seeds);
+          const { canvas, distance } = shoot(TILE_W, TILE_H, box, SUN_SIDE);
+          canvas.style.cssText = "border:1px solid #2a2f38;cursor:pointer;display:block";
+          canvas.onclick = () => bigShot(id);
+          const wrap = document.createElement("div");
+          wrap.innerHTML =
+            `<div style="opacity:.55;padding:2px 0">${id} — ${STREET_PROPS[id].what}</div>` +
+            `<div style="opacity:.35;padding-bottom:2px">${n} seed${n > 1 ? "s" : ""} · camera ${distance.toFixed(1)} m</div>`;
+          wrap.appendChild(canvas);
+          sheet.appendChild(wrap);
+        }
+      }
+
+      function drawLineup() {
+        lineup.innerHTML = "";
+        // THREE to a pane, not five. The first cut of this page put five in a
+        // 1440x420 strip and framed the lot: the camera sat at its 15 m ceiling
+        // and every prop came out 100 px tall, which is a picture of a row of
+        // dots and proves nothing about a material. A pane is a shot, and a
+        // shot is one thing seen from where the game sees it.
+        const PER_PANE = 3;
+        for (let p = 0; p < STREET_PROP_IDS.length; p += PER_PANE) {
+          const ids = STREET_PROP_IDS.slice(p, p + PER_PANE);
+          clearStage();
+          wall.visible = false;
+          const box = new THREE.Box3();
+          let x = 0;
+          for (const [i, id] of ids.entries()) {
+            const b = STREET_PROPS[id].bounds;
+            x += i === 0 ? 0 : b.hx;
+            const prop = buildStreetProp(id, seedBase + p + i + 3);
+            prop.position.x = x;
+            stage.add(prop);
+            box.expandByObject(prop);
+            x += b.hx + 1.0;
+          }
+          const pole = scalePole();
+          pole.position.set(-1.2, 0, 0.4);
+          stage.add(pole);
+          box.expandByObject(pole);
+          const { canvas, distance } = shoot(1440, 560, box, SHADE_SIDE);
+          canvas.style.cssText = "width:100%;max-width:1440px;border:1px solid #2a2f38";
+          const wrap = document.createElement("div");
+          wrap.innerHTML = `<div style="opacity:.35;padding:2px 0">${ids.join(" · ")} — camera ${distance.toFixed(1)} m (wall props are shown without their wall)</div>`;
+          wrap.appendChild(canvas);
+          lineup.appendChild(wrap);
+        }
+      }
+
+      /** The atlas, as a picture, with its cell names written on it. */
+      function drawAtlas() {
+        const src = propMaterials().print.map.image;
+        const c = document.createElement("canvas");
+        c.width = c.height = 512;
+        const g = c.getContext("2d");
+        g.drawImage(src, 0, 0);
+        g.font = "700 11px ui-monospace,monospace";
+        g.textBaseline = "top";
+        for (const [name, [cx, cy]] of Object.entries(CELL)) {
+          g.fillStyle = "rgba(0,0,0,0.65)";
+          g.fillRect(cx * 128, cy * 128, 128, 15);
+          g.fillStyle = "#e8e4dc";
+          g.fillText(name, cx * 128 + 4, cy * 128 + 2);
+          g.strokeStyle = "rgba(232,228,220,0.35)";
+          g.strokeRect(cx * 128 + 0.5, cy * 128 + 0.5, 127, 127);
+        }
+        c.style.cssText = "border:1px solid #2a2f38;image-rendering:pixelated;width:512px";
+        const box = document.getElementById("atlas");
+        box.innerHTML = "";
+        box.appendChild(c);
+      }
+
+      // --- the ray probe ------------------------------------------------------
+      //
+      // Drop a grid of rays straight down through a prop's own collider
+      // footprint and ask what they land on. `spot.ts` turns the collider into
+      // a flat Solid at `top`, so `top` is a claim about the geometry: it says
+      // "there is matter here, at this height, all across this footprint". The
+      // probe is the only way to check that claim, and it is what caught the
+      // sealed crate — a stack whose every column's first hit was the same lid,
+      // with the well, the box cap and the rim's underside all buried under it.
+      //
+      // FOLIAGE AND CARDBOARD ARE SKIPPED, on purpose and by material. A
+      // planter's shrub stands a metre over its rim and a pallet stack's carton
+      // sits on its deck; neither is a surface, the physics never lands on one,
+      // and a probe that counted them would be measuring the wrong object.
+      const raycaster = new THREE.Raycaster();
+      const DOWN = new THREE.Vector3(0, -1, 0);
+      const soft = () => new Set([propMaterials().leaf, propMaterials().card]);
+
+      function probe(root, block, n = 15) {
+        const skip = soft();
+        const targets = [];
+        root.traverse((o) => o.isMesh && !skip.has(o.material) && targets.push(o));
+        const hits = [];
+        for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+            const x = (((i + 0.5) / n) * 2 - 1) * block.hx;
+            const z = (((j + 0.5) / n) * 2 - 1) * block.hz;
+            raycaster.set(new THREE.Vector3(x, block.top + 5, z), DOWN);
+            const hit = raycaster.intersectObjects(targets, false)[0];
+            if (hit) hits.push(hit.point.y);
+          }
+        }
+        hits.sort((a, b) => a - b);
+        const q = (t) => (hits.length ? hits[Math.min(hits.length - 1, Math.floor(t * hits.length))] : NaN);
+        // p90 is the FLOAT test: is there real surface up at the landing
+        // height, anywhere that matters. p50 is the SINK test: is most of the
+        // footprint at or below it. A single thin spike — a planted whip's
+        // stem, one board of a leaner — moves neither, which is the point.
+        return { cover: hits.length / (n * n), p50: q(0.5), p90: q(0.9) };
+      }
+
+      // --- the numbers -------------------------------------------------------
+      function measure() {
+        const SEEDS = 64;
+        log("id                 tris(min–max)  mesh  mat   measured hx/hz/y0/y1        stated hx/hz/y1     fit");
+        let total = 0;
+        const allMats = new Set();
+        let worst = 0;
+        for (const id of STREET_PROP_IDS) {
+          const p = STREET_PROPS[id];
+          let tmin = Infinity, tmax = 0, mmax = 0, matMax = 0;
+          let hx = 0, hz = 0, y0 = Infinity, y1 = 0;
+          let median = 0;
+          for (let s = 0; s < SEEDS; s++) {
+            const root = buildStreetProp(id, s * 13 + 1);
+            const c = count(root);
+            tmin = Math.min(tmin, c.tris);
+            tmax = Math.max(tmax, c.tris);
+            mmax = Math.max(mmax, c.meshes);
+            matMax = Math.max(matMax, c.mats);
+            median += c.tris / SEEDS;
+            const b = root.userData.prop.bounds;
+            hx = Math.max(hx, b.hx);
+            hz = Math.max(hz, b.hz);
+            y0 = Math.min(y0, b.y0);
+            y1 = Math.max(y1, b.y1);
+            root.traverse((o) => o.isMesh && (allMats.add(o.material), o.geometry.dispose()));
+          }
+          total += median;
+          // The envelope check. 1 cm of slack, because a stated bound is a
+          // placement number and not a physics one.
+          const fits = hx <= p.bounds.hx + 0.01 && hz <= p.bounds.hz + 0.01 &&
+            y1 <= p.bounds.y1 + 0.01 && y0 >= p.bounds.y0 - 0.01;
+          if (!fits) worst++;
+          log(
+            `${id.padEnd(18)} ${String(Math.round(tmin)).padStart(5)}–${String(Math.round(tmax)).padEnd(5)}  ` +
+            `${String(mmax).padStart(4)}  ${String(matMax).padStart(3)}   ` +
+            `${hx.toFixed(2).padStart(5)} ${hz.toFixed(2).padStart(5)} ${y0.toFixed(2).padStart(5)} ${y1.toFixed(2).padStart(5)}    ` +
+            `${p.bounds.hx.toFixed(2).padStart(5)} ${p.bounds.hz.toFixed(2).padStart(5)} ${p.bounds.y1.toFixed(2).padStart(5)}   ` +
+            (fits ? "ok" : "OVER"),
+          );
+        }
+        log("");
+        log(`one of each, mean over ${SEEDS} seeds: ${Math.round(total)} triangles`);
+        log(`materials shared across the whole library: ${allMats.size}`);
+        log(`envelope failures: ${worst}`);
+        measureColliders();
+        measurePlacedStreet();
+      }
+
+      /**
+       * THE COLLIDER GATE.
+       *
+       * Five things have to be true of every seed of every family, and each of
+       * them was false somewhere before this page checked it:
+       *
+       *   SPLIT  the two ways the game asks for a collider return the SAME
+       *          object — `STREET_PROPS[id].collider` (map 2) and
+       *          `streetPropCollider(id, seed)` (map 1). This is the check that
+       *          was missing, and its absence is why every other line on this
+       *          page could be green over a broken street.
+       *   FLOAT  the landing height is not above the geometry (p90 test, and
+       *          `top` is inside the instance's own measured envelope)
+       *   SINK   the landing height is not buried in it (p50 test)
+       *   WIDE   the footprint is not wider than the object — a two-hoop bike
+       *          rack carrying a four-hoop footprint is 68 cm of invisible wall
+       *   GRIND  every published grind line lies ON the solid, not inside it
+       *
+       * FLOAT and SINK are only asked of `ride: true` colliders. A bollard's
+       * `top` is a ceiling for a query, not a surface anybody lands on, and
+       * demanding a flat 1.2 m table on top of a 140 mm post would be checking
+       * for something the library never claimed.
+       *
+       * WIDE has a FLOOR of 0.13 m and that is not slack, it is the difference
+       * between the two things "too wide" can mean. A U-channel sign post is
+       * 26 mm of real steel and the ride steps 0.2 m in a frame, so its
+       * collider has to be a hand's width or the query tunnels through it —
+       * 9 cm of invisible post is a stopper's minimum, not a wall. The bug this
+       * catches is the other kind: a two-hoop bike rack carrying the four-hoop
+       * family's footprint, which is 68 cm of nothing you get stopped by.
+       *
+       * The tolerances are TIGHTER than they were, and they can be: the library
+       * no longer varies a collider's own dimensions per seed, so the numbers
+       * are meant to be exact rather than covering. 0.03 m is roughly a wheel,
+       * and anything a wheel deep is something a player can see the board doing.
+       */
+      const WIDE_FLOOR = 0.13;
+      const TOL = 0.03;
+
+      function measureColliders() {
+        const SEEDS = 24;
+        log("");
+        log("COLLIDERS — the block the GAME builds, asked for both ways, and what the rays find under it");
+        log("id                 ride   top    hx     hz     float  sink   wide   grind  split  verdict");
+        let bad = 0;
+        for (const id of STREET_PROP_IDS) {
+          const fam = STREET_PROPS[id];
+          if (!fam.collider) {
+            // Scenery still has to agree that it is scenery, both ways round.
+            const split = STREET_PROP_IDS.length && streetPropCollider(id, 5) !== null;
+            if (split) bad++;
+            log(`${id.padEnd(18)}  —    scenery — knocked through, no solid built${split ? "   SPLIT" : ""}`);
+            continue;
+          }
+          const b = fam.collider;
+          let float = 0, sink = 0, wide = 0, grind = 0, split = 0;
+          for (let s = 0; s < SEEDS; s++) {
+            const seed = s * 29 + 5;
+            // Asked the way map 1 asks, and compared by IDENTITY with the way
+            // map 2 asks. Not by value: two objects that happen to agree today
+            // are exactly what shipped last time.
+            if (streetPropCollider(id, seed) !== b) split++;
+            const root = buildStreetProp(id, seed);
+            const inst = root.userData.prop;
+            if (inst.collider !== b) split++;
+            if (b.top > inst.bounds.y1 + 0.02) float = Math.max(float, b.top - inst.bounds.y1);
+            wide = Math.max(
+              wide,
+              b.hx - Math.max(inst.bounds.hx, WIDE_FLOOR),
+              b.hz - Math.max(inst.bounds.hz, WIDE_FLOOR),
+            );
+            if (b.ride) {
+              const p = probe(root, b);
+              if (Number.isFinite(p.p90)) float = Math.max(float, b.top - p.p90);
+              if (Number.isFinite(p.p50)) sink = Math.max(sink, p.p50 - b.top);
+            }
+            for (const g of inst.grindLines) {
+              grind = Math.max(grind, b.top - g.a[1], b.top - g.b[1]);
+            }
+            root.traverse((o) => o.isMesh && o.geometry.dispose());
+          }
+          const fail = float > TOL || sink > TOL || wide > TOL || grind > 0.02 || split > 0;
+          if (fail) bad++;
+          log(
+            `${id.padEnd(18)} ${b.ride ? "yes " : "no  "} ` +
+            `${b.top.toFixed(3).padStart(6)} ${b.hx.toFixed(3).padStart(6)} ${b.hz.toFixed(3).padStart(6)}  ` +
+            `${float.toFixed(3).padStart(6)} ${sink.toFixed(3).padStart(6)} ${wide.toFixed(3).padStart(6)} ${grind.toFixed(3).padStart(6)} ${String(split).padStart(6)}   ` +
+            (fail ? `FAIL${split ? " (the two spellings disagree)" : ""}` : "ok"),
+          );
+        }
+        log(`collider failures: ${bad}   (float/sink/wide tolerance ${TOL} m, grind 0.02 m, split must be 0)`);
+      }
+
+      /**
+       * THE STREET, exactly as `spot.ts` places it — same ids, same seeds.
+       *
+       * The library's budget line used to be quoted for "forty of them". The map
+       * is 55, and a per-family number does not add up to a map on its own. This
+       * builds the real list and prints what it really costs, plus the gap
+       * between what each placed prop's collider says and what that instance
+       * actually measures — which is the table the ride is standing on.
+       */
+      function measurePlacedStreet() {
+        let tris = 0, meshes = 0, rideable = 0, solids = 0, offenders = 0;
+        const mats = new Set();
+        let worstFloat = { id: "—", d: 0 }, worstSink = { id: "—", d: 0 }, worstWide = { id: "—", d: 0 };
+        for (const p of STREET_PLACEMENTS) {
+          const root = buildStreetProp(p.id, p.seed);
+          const c = count(root);
+          tris += c.tris;
+          meshes += c.meshes;
+          root.traverse((o) => o.isMesh && mats.add(o.material));
+          // The block THE GAME BUILDS for this placement, asked for through the
+          // same call `spot.ts` makes. Not a per-family average and not the
+          // other field: this is the solid the board is stopped by.
+          const b = streetPropCollider(p.id, p.seed);
+          if (b) {
+            solids++;
+            const inst = root.userData.prop;
+            let worst = Math.max(
+              b.hx - Math.max(inst.bounds.hx, WIDE_FLOOR),
+              b.hz - Math.max(inst.bounds.hz, WIDE_FLOOR),
+            );
+            if (b.ride) {
+              rideable++;
+              // The same probe the family gate uses, on the placement's own
+              // seed: this is the board's real relationship with the real
+              // object.
+              const q = probe(root, b);
+              if (Number.isFinite(q.p90)) {
+                const d = b.top - q.p90;
+                if (d > worstFloat.d) worstFloat = { id: `${p.id}#${p.seed}`, d };
+                worst = Math.max(worst, d);
+              }
+              if (Number.isFinite(q.p50)) {
+                const d = q.p50 - b.top;
+                if (d > worstSink.d) worstSink = { id: `${p.id}#${p.seed}`, d };
+                worst = Math.max(worst, d);
+              }
+            }
+            if (b.hx - Math.max(inst.bounds.hx, WIDE_FLOOR) > worstWide.d) worstWide = { id: `${p.id}#${p.seed}`, d: b.hx - Math.max(inst.bounds.hx, WIDE_FLOOR) };
+            if (b.hz - Math.max(inst.bounds.hz, WIDE_FLOOR) > worstWide.d) worstWide = { id: `${p.id}#${p.seed}`, d: b.hz - Math.max(inst.bounds.hz, WIDE_FLOOR) };
+            if (worst > TOL) offenders++;
+          }
+          root.traverse((o) => o.isMesh && o.geometry.dispose());
+        }
+        log("");
+        log("THE STREET AS PLACED (spot.ts STREET_PLACEMENTS, its own seeds):");
+        log(`  ${STREET_PLACEMENTS.length} props · ${meshes} meshes · ${Math.round(tris)} triangles · ${mats.size} materials`);
+        log(`  ${solids} carry a solid, ${rideable} of those rideable; rays through each one's own footprint —`);
+        log(`  worst landing surface ABOVE the geometry: ${worstFloat.d.toFixed(3)} m  ${worstFloat.id}`);
+        log(`  worst landing surface BELOW the geometry: ${worstSink.d.toFixed(3)} m  ${worstSink.id}`);
+        log(`  worst footprint WIDER than the object:    ${worstWide.d.toFixed(3)} m  ${worstWide.id}`);
+        // The headline number, and the one a critic counted by hand: how many
+        // of the solids the game really builds are wrong by more than a wheel.
+        //
+        // It is a REPORT, not the gate, and the difference matters. This line
+        // sees only the 41 seeds the map happens to place; the family gate
+        // above sees 24 seeds of every family. Unfreezing the cabinet's height
+        // by hand reds the family gate at 0.104 m of float and leaves this line
+        // at 0 of 41, because none of the five placed cabinets drew a tall one.
+        // Judge the library upstairs; read this for what the street costs.
+        log(`  placed solids wrong by more than ${TOL} m: ${offenders} of ${solids}`);
+        log("");
+        log("grind lines published on the instance (userData.prop.grindLines), against its own collider top:");
+        for (const id of STREET_PROP_IDS) {
+          const root = buildStreetProp(id, 7);
+          const g = root.userData.prop.grindLines;
+          const b = root.userData.prop.collider;
+          if (!g.length) continue;
+          log(`  ${id.padEnd(18)} ${g.length} × ${g[0].kind}  y ${g[0].a[1].toFixed(3)}   collider top ${b ? b.top.toFixed(3) : "—"}`);
+        }
+      }
+
+      // --- controls ----------------------------------------------------------
+      const controls = document.getElementById("controls");
+      const button = (label, fn) => {
+        const b = document.createElement("button");
+        b.textContent = label;
+        b.style.cssText = "font:600 12px ui-monospace,monospace;background:#20242c;color:#e8e4dc;border:1px solid #39404b;padding:4px 10px;cursor:pointer";
+        b.onclick = fn;
+        controls.appendChild(b);
+        return b;
+      };
+      const seedLabel = document.createElement("span");
+      const redraw = () => {
+        seedLabel.textContent = `seed base ${seedBase}`;
+        drawAtlas();
+        drawLineup();
+        drawSheet();
+        bigShot(STREET_PROP_IDS[0]);
+      };
+      button("next seeds ▸", () => { seedBase += 11; redraw(); });
+      button("◂ prev seeds", () => { seedBase = Math.max(0, seedBase - 11); redraw(); });
+      controls.appendChild(seedLabel);
+      seedLabel.style.cssText = "opacity:.5;padding:0 10px";
+      const spotLabel = document.createElement("label");
+      spotLabel.style.cssText = "display:flex;gap:5px;align-items:center;cursor:pointer;opacity:.7";
+      spotLabel.innerHTML = `<input type="checkbox"> stand them on the real spot`;
+      spotLabel.querySelector("input").onchange = (e) => {
+        spot.visible = e.target.checked;
+        ground.visible = !e.target.checked;
+        redraw();
+      };
+      controls.appendChild(spotLabel);
+
+      // The scene on the console, so a material can be poked and the same
+      // cameras re-shot without a reload.
+      Object.assign(window, {
+        THREE, propScene: scene, propRenderer: renderer, propRedraw: redraw,
+        STREET_PROPS, buildStreetProp,
+      });
+
+      redraw();
+      measure();
+      dressField(scene, field, tier, renderer).then(() => {
+        // Re-shoot once the real sky is up: the environment light it puts into
+        // the scene is a third of what lands on a painted steel box, so the
+        // stand-in pass and the dressed pass are two different judgements.
+        redraw();
+        log("");
+        log("sky + generated surfaces landed — shots above are the dressed pass");
+        document.body.dataset.ready = "1";
+      }).catch((e) => {
+        log(`\ndress failed (offline?) — shots are the stand-in pass: ${e}`);
+        document.body.dataset.ready = "1";
+      });
+    </script>
+  </body>
+</html>
